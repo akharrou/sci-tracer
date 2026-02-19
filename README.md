@@ -4,6 +4,16 @@
 
 Sci-Trace is an agentic research system designed to automate the discovery of a scientific concept's "intellectual lineage." While traditional search tools retrieve documents based on keywords, Sci-Trace acts as a **domain-adaptive agent** that recursively navigates the global citation graph to identify the true methodological ancestors of modern research.
 
+## 📺 Demo
+
+*Watch Sci-Trace autonomously map the lineage of BERT live on an AWS EC2 instance.*
+
+<p align="center">
+
+[![Sci-Trace Showcase](https://img.youtube.com/vi/g6H8fhyjWhk/0.jpg)](https://www.youtube.com/watch?v=g6H8fhyjWhk)
+
+</p>
+
 ---
 
 ## 🔬 A Proof-of-Concept for Autonomous Science
@@ -27,70 +37,7 @@ To ensure stability and responsiveness, Sci-Trace utilizes a decoupled **Host-Ke
 
 ### Architecture Diagram
 
-```mermaid
----
-config:
-  layout: fixed
----
-flowchart TB
- subgraph External_APIs["External Cloud Services"]
-        SemScholar["Semantic Scholar API"]
-        LLM["Gemini 2.5 / Claude 3.5<br>(via OpenRouter)"]
-  end
- subgraph Host_Daemon["Host Daemon"]
-        DiscordBot["Discord Client"]
-        CommandMgr["Command Handler"]
-        Bridge["Kernel Bridge<br>Child Process Manager"]
-        Parser["Stdout Regex Parser"]
-  end
- subgraph Host_Layer["Host Layer: Node.js / Discord.js"]
-        PM2["PM2 Process Manager"]
-        Host_Daemon
-  end
- subgraph File_System["Shared File System"]
-        Artifacts[/"kernel/artifacts/*.png"/]
-        Logs[/"host/logs/app.log"/]
-  end
- subgraph LangGraph_Engine["LangGraph State Machine brain.py"]
-        Node_Init("Start: Initialize State")
-        Node_Search["Node: Search & Harvest"]
-        Node_Filter["Node: Heuristic Filter"]
-        Node_Eval["Node: Parallel Evaluate"]
-        Node_Summary["Node: Narrative Synthesis"]
-        Node_Plot["Node: Visualization"]
-  end
- subgraph Kernel_Layer["Kernel Layer: Python 3.11 / LangGraph"]
-        CLI["CLI Adapter<br>main.py"]
-        LangGraph_Engine
-        Tool_SS["Tool: Scholar Wrapper"]
-        Tool_Plot["Tool: Matplotlib"]
-  end
- subgraph AWS_EC2["AWS EC2 Instance t3.medium / Ubuntu 22.04"]
-        Host_Layer
-        File_System
-        Kernel_Layer
-  end
-    User(("User")) -- "/trace Self-RAG" --> Discord["Discord Cloud"]
-    Discord -- Gateway Intent --> DiscordBot
-    DiscordBot -- InteractionCreate --> CommandMgr
-    CommandMgr -- Spawn Process --> Bridge
-    Bridge -- "spawn python3 main.py" --> CLI
-    CLI --> Node_Init
-    Node_Init --> Node_Search
-    Node_Search -- Query --> Tool_SS
-    Tool_SS <-- JSON Data --> SemScholar
-    Node_Search --> Node_Filter
-    Node_Filter -- Queue --> Node_Eval
-    Node_Eval -- Batch (5) --> LLM
-    Node_Eval --> Node_Summary
-    Node_Summary --> Node_Plot
-    Node_Plot -- Generate PNG --> Artifacts
-    CLI -- Print UI tags --> Parser
-    Parser -- Update Status --> DiscordBot
-    Parser -- Read File --> Artifacts
-    DiscordBot -- Upload File + Embed --> Discord
-    Discord -- Image + Narrative --> User
-```
+![Sci-Trace Architecture](docs/assets/v1_arch.png)
 
 ---
 
@@ -98,41 +45,7 @@ flowchart TB
 
 The following sequence illustrates the autonomous handoff between the persistent Discord interface and the ephemeral research kernel.
 
-```mermaid
-sequenceDiagram
-    autonumber
-
-    actor User as 👤 User (Discord)
-    participant Discord as ☁️ Discord Cloud
-    participant Host as 🟢 Host (Node.js)
-    participant Kernel as 🐍 Kernel (Python)
-    participant SemSch as 📚 Semantic Scholar API
-    participant LLM as 🧠 LLM (OpenRouter/Gemini)
-
-    User->>Discord: Slash Command: "/trace Self-RAG"
-    Discord->>Host: Interaction Create Event
-    Host->>Discord: Defer Reply (Thinking...)
-
-    Host->>Kernel: spawn("python3 kernel/src/main.py --topic 'Self-RAG'")
-    activate Kernel
-
-    loop Until Root Found or Max Depth
-        Kernel->>SemSch: Fetch Metadata & References
-        Kernel->>Host: stdout: "[UI:UPDATE] Found 'Self-RAG'..."
-        Host->>Discord: Edit Message (Status Update)
-
-        Kernel->>LLM: Evaluate Ancestor (Pydantic AI)
-        LLM-->>Kernel: JSON {selected_id, reasoning}
-    end
-
-    Kernel->>Kernel: Generate Plot (Matplotlib)
-    Kernel->>Host: stdout: "[UI:IMAGE] /path/to/trace.png"
-    Kernel->>Host: stdout: "[UI:FINAL] Summary Markdown..."
-    deactivate Kernel
-
-    Host->>Discord: Upload File + Final Narrative Embed
-    Discord->>User: Display Lineage Report
-```
+![Sci-Trace Sequence](docs/assets/v1_request_lifecycle_process.png)
 
 ---
 
