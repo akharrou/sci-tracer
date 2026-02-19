@@ -1,0 +1,8 @@
+langgraph
+langchain-openai
+pydantic
+pydantic-ai
+matplotlib
+networkx
+requests
+python-dotenv
