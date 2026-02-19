@@ -24,13 +24,13 @@ fi
 
 # 2. Sync codebase (excluding local environments and secrets)
 echo "📦 Syncing files..."
-rsync -avz -e "ssh -i $KEY" 
-    --exclude 'kernel/.venv' 
-    --exclude 'host/node_modules' 
-    --exclude '.git' 
-    --exclude '.env' 
-    --exclude 'kernel/artifacts/*' 
-    --exclude 'host/logs/*' 
+rsync -avz -e "ssh -i $KEY" \
+    --exclude 'kernel/.venv' \
+    --exclude 'host/node_modules' \
+    --exclude '.git' \
+    --exclude '.env' \
+    --exclude 'kernel/artifacts/*' \
+    --exclude 'host/logs/*' \
     ./ $USER@$IP:$REMOTE_PATH
 
 # 3. Remote Setup
