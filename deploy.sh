@@ -22,22 +22,29 @@ if [ ! -f "$KEY" ]; then
     exit 1
 fi
 
-# 2. Sync codebase (excluding local environments and secrets)
-echo "📦 Syncing files..."
+# 2. Sync codebase (STRICT MINIMUM ONLY)
+echo "📦 Syncing core files..."
 rsync -avz -e "ssh -i $KEY" \
     --exclude 'kernel/.venv' \
     --exclude 'host/node_modules' \
-    --exclude '.git' \
-    --exclude '.env' \
+    --exclude 'kernel/tests' \
     --exclude 'kernel/artifacts/*' \
     --exclude 'host/logs/*' \
+    --exclude '.git' \
+    --exclude '.env' \
+    --exclude '.agent' \
+    --exclude '.context' \
+    --exclude 'infra' \
+    --exclude 'docs' \
+    --exclude 'Makefile' \
+    --exclude '*.out' \
     ./ $USER@$IP:$REMOTE_PATH
 
 # 3. Remote Setup
 echo "⚙️  Configuring remote environment..."
 ssh -i $KEY $USER@$IP << EOF
     cd $REMOTE_PATH
-    
+
     # Kernel Setup
     echo "🐍 Setting up Python Kernel..."
     cd kernel
