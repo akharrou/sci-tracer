@@ -19,6 +19,7 @@ from .tools import search_paper, get_references
 
 from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.providers.google import GoogleProvider
+from pydantic_ai.providers.openrouter import OpenRouterProvider
 
 load_dotenv()
 
@@ -29,30 +30,42 @@ FOUNDATIONAL_YEAR_THRESHOLD = int(os.getenv("FOUNDATIONAL_YEAR_THRESHOLD", "2010
 # Rate Limiting Configuration (Task 8)
 GEMINI_RPM_LIMIT = int(os.getenv("GEMINI_RPM_LIMIT", "20"))
 MAX_EVAL_BATCH_SIZE = int(os.getenv("MAX_EVAL_BATCH_SIZE", "5"))
+MAX_CANDIDATES_TO_QUEUE = int(os.getenv("MAX_CANDIDATES_TO_QUEUE", "15"))
 # Semaphore ensures we don't exceed the configured RPM in parallel batches
 rate_limiter = asyncio.Semaphore(GEMINI_RPM_LIMIT)
 
-# Initialize Pydantic AI Agent for reasoning using Google Gemini
-model = GoogleModel(
-    "models/gemini-2.5-flash",
-    provider=GoogleProvider(api_key=os.getenv("GEMINI_API_KEY")),
-)
+# Initialize LLM (Prefer OpenRouter if key is available, else fallback to Gemini)
+openrouter_key = os.getenv("OPENROUTER_API_KEY")
+gemini_key = os.getenv("GEMINI_API_KEY")
 
-# Sequential Evaluation Agent (Evaluates ONE candidate at a time)
+if openrouter_key:
+    model = OpenAIChatModel(
+        os.getenv("OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet"),
+        provider=OpenRouterProvider(api_key=openrouter_key),
+    )
+elif gemini_key:
+    model = GoogleModel(
+        os.getenv("GEMINI_MODEL", "models/gemini-2.5-flash"),
+        provider=GoogleProvider(api_key=gemini_key),
+    )
+else:
+    raise ValueError("No LLM API key found (OPENROUTER_API_KEY or GEMINI_API_KEY)")
+
 eval_agent = Agent(
     model,
     output_type=CitationDecision,
     system_prompt=(
-        "You are a rigorous scientific reviewer. You will be provided with a target paper and ONE candidate reference. "
-        "Your task is to decide if this reference is a primary intellectual or methodological ancestor of the target. "
+        "You are a scientific researcher mapping the intellectual history of a field. "
+        "You will be provided with a target paper and ONE candidate reference. "
+        "Your task is to decide if this reference provided a significant methodological or conceptual foundation for the target paper. "
         "\n\n### EVALUATION PROTOCOL:\n"
-        "1. **Identify Method**: Does the candidate provide the methodological foundation for the target?\n"
-        "2. **Validate Citation**: Is this a casual mention or a foundational root?\n"
-        "3. **Match Confirmation**: If it is a match, you MUST set 'selected_paper_id' to the EXACT ID provided in the prompt. "
+        "1. **Identify Connection**: Does the candidate introduce techniques, architectures, or concepts that the target paper builds upon?\n"
+        "2. **Assess Significance**: Is this a major pillar of the target's research? (Include papers that are the 'next step back' in the evolution).\n"
+        "3. **Match Confirmation**: If it is a significant ancestor, you MUST set 'selected_paper_id' to the EXACT ID provided in the prompt. "
         "Otherwise, leave 'selected_paper_id' empty.\n"
-        "\n### CRITICAL RULE:\n"
-        "Be inclusive of papers that represent the 'next step back' in the lineage. "
-        "Only mark 'is_foundational' for seminal pre-2010 works."
+        "\n### CRITICAL RULES:\n"
+        "- Be exploratory. We want to find the chain of ideas back to historical roots.\n"
+        "- Only set 'is_foundational' to true for truly seminal works from before 2010 (e.g. Transformer, ResNet are ancestors, but LeNet or Backprop are foundational)."
     )
 )
 
@@ -61,23 +74,24 @@ async def evaluate_worker(target: Paper, candidate: Paper) -> EvaluationResult:
     """Async worker to evaluate a single (target, candidate) pair with rate limiting."""
     prompt = (
         f"Target Paper: {target.title} ({target.year})\n"
-        f"Abstract: {target.abstract}\n\n"
+        f"Target Abstract: {target.abstract}\n\n"
         f"--- CANDIDATE TO EVALUATE ---\n"
         f"ID: {candidate.paper_id}\n"
         f"Title: {candidate.title} ({candidate.year})\n"
-        f"Citations: {candidate.citation_count}\n\n"
+        f"Citations: {candidate.citation_count}\n"
+        f"Candidate Abstract: {candidate.abstract}\n\n"
         f"Question: Is this candidate the methodological ancestor of the target?"
     )
-    
+
     # Task 8: Acquire semaphore before making the API call
     async with rate_limiter:
         result = await eval_agent.run(prompt)
         await asyncio.sleep(60 / GEMINI_RPM_LIMIT)
-        
+
     decision = result.output
     # Match confirmed if ID matches OR if the reasoning is highly confident
     is_match = (decision.selected_paper_id == candidate.paper_id)
-    
+
     return EvaluationResult(
         paper=candidate,
         decision=decision,
@@ -100,28 +114,28 @@ def search_node(state: AgentState) -> dict:
 def filter_node(state: AgentState) -> dict:
     if state.error or not state.current_paper:
         return {}
-    
+
     print(f"[UI:UPDATE] Fetching and filtering references for '{state.current_paper.title[:30]}...'")
-    
+
     references = get_references(state.current_paper.paper_id)
     if not references:
         return {"candidate_queue": [], "found_root": True}
-    
+
     current_year = state.current_paper.year or 9999
-    
+
     filtered = []
     for p in references:
         if not p.paper_id: continue
         if p.year is not None and p.year > current_year: continue
         if p.citation_count < MIN_CITATION_COUNT: continue
         filtered.append(p)
-    
-    # Sort and take top 15 (Queue for Parallel Evaluation batches)
+
+    # Sort and take top candidates (Queue for Parallel Evaluation batches)
     filtered.sort(key=lambda x: x.citation_count, reverse=True)
-    queue = filtered[:15]
-    
-    print(f"[UI:UPDATE] Queued {len(queue)} candidates for parallel evaluation batches.")
-    
+    queue = filtered[:MAX_CANDIDATES_TO_QUEUE]
+
+    print(f"[UI:UPDATE] Queued {len(queue)} candidates for parallel evaluation batches (Max: {MAX_CANDIDATES_TO_QUEUE}).")
+
     return {
         "candidate_queue": queue,
         "found_root": len(queue) == 0
@@ -131,7 +145,7 @@ async def evaluate_node(state: AgentState) -> dict:
     """Processes up to a batch of papers in parallel from the queue."""
     if state.error or not state.candidate_queue:
         return {"found_root": True}
-    
+
     if state.depth >= state.max_depth:
         print(f"[UI:UPDATE] Reached maximum depth ({state.max_depth}). Stopping.")
         return {"found_root": True}
@@ -139,28 +153,28 @@ async def evaluate_node(state: AgentState) -> dict:
     # Take the next batch (up to MAX_EVAL_BATCH_SIZE)
     batch = state.candidate_queue[:MAX_EVAL_BATCH_SIZE]
     remaining_queue = state.candidate_queue[MAX_EVAL_BATCH_SIZE:]
-    
+
     print(f"[UI:UPDATE] Starting parallel batch evaluation of {len(batch)} papers (Limit: {MAX_EVAL_BATCH_SIZE})...")
-    
+
     start_time = time.perf_counter()
-    
+
     # --- CONCURRENT EXECUTION ---
     tasks = [evaluate_worker(state.current_paper, p) for p in batch]
     results = await asyncio.gather(*tasks)
-    
+
     end_time = time.perf_counter()
     duration = end_time - start_time
     throughput = len(batch) / duration
-    
+
     print(f"[UI:UPDATE] Batch complete. Throughput: {throughput:.2f} papers/sec (Processed {len(batch)} in {duration:.2f}s)")
-    
+
     # Process results: Look for matches
     matches = [r for r in results if r.is_match]
-    
+
     if matches:
         # If multiple matches, pick the one with highest confidence
         best_match = sorted(matches, key=lambda x: x.decision.confidence, reverse=True)[0]
-        
+
         print(f"[UI:UPDATE] Ancestor Confirmed: {best_match.paper.title} ({best_match.paper.year})")
         step = LineageStep(
             current_paper=state.current_paper,
@@ -181,7 +195,7 @@ async def evaluate_node(state: AgentState) -> dict:
         if not remaining_queue:
             print("[UI:UPDATE] All queued candidates evaluated. No ancestor found.")
             return {"candidate_queue": [], "found_root": True}
-        
+
         return {
             "candidate_queue": remaining_queue
         }
@@ -196,18 +210,18 @@ summary_agent = Agent(
     )
 )
 
-def summary_node(state: AgentState) -> dict:
+async def summary_node(state: AgentState) -> dict:
     if state.error or not state.history:
         return {}
-    
+
     print("[UI:UPDATE] Synthesizing final lineage summary...")
-    
+
     # Format the history for the LLM
     steps_text = "\n".join([
         f"- {s.current_paper.title} ({s.current_paper.year}) -> {s.parent_paper.title} ({s.parent_paper.year})\n  Reasoning: {s.reasoning}"
         for s in reversed(state.history) # Oldest to Newest is better for narrative
     ])
-    
+
     # Create breadcrumb path (Oldest ➔ ... ➔ Newest)
     path_nodes = []
     # Ancestors are in parent_paper, the last step's parent is the oldest
@@ -216,15 +230,15 @@ def summary_node(state: AgentState) -> dict:
         # Path should be P3 ➔ P2 ➔ P1 ➔ Target
         path_nodes = [s.parent_paper for s in reversed(state.history)]
         path_nodes.append(state.history[0].current_paper)
-    
+
     breadcrumb = " ➔ ".join([f"**{p.title[:20]}** ({p.year})" for p in path_nodes])
-    
+
     prompt = f"Target Topic: {state.target_topic}\nLineage Trace:\n{steps_text}\n\nSummarize the intellectual journey."
-    
-    result = summary_agent.run_sync(prompt)
-    
+
+    result = await summary_agent.run(prompt)
+
     final_markdown = f"### Path: {breadcrumb}\n\n{result.output}"
-    
+
     return {"final_summary": final_markdown}
 
 def draw_paper_icon(ax, x, y, size, color, accent_color):
@@ -232,11 +246,11 @@ def draw_paper_icon(ax, x, y, size, color, accent_color):
     w = size
     h = size * 1.3
     fold = size * 0.3
-    
+
     # Coordinates relative to center (x,y)
     left, right = x - w/2, x + w/2
     bottom, top = y - h/2, y + h/2
-    
+
     # 1. Subtle Shadow (Soft Gray)
     shadow_offset = 0.005
     shadow_verts = [
@@ -244,31 +258,31 @@ def draw_paper_icon(ax, x, y, size, color, accent_color):
         (right-fold+shadow_offset, top-shadow_offset), (right+shadow_offset, top-fold-shadow_offset),
         (right+shadow_offset, bottom-shadow_offset), (left+shadow_offset, bottom-shadow_offset),
     ]
-    ax.add_patch(patches.PathPatch(Path(shadow_verts, [Path.MOVETO, Path.LINETO, Path.LINETO, Path.LINETO, Path.LINETO, Path.CLOSEPOLY]), 
+    ax.add_patch(patches.PathPatch(Path(shadow_verts, [Path.MOVETO, Path.LINETO, Path.LINETO, Path.LINETO, Path.LINETO, Path.CLOSEPOLY]),
                                   facecolor='#D9E2EC', edgecolor='none', alpha=0.5, zorder=1))
-    
+
     # 2. Main Body (White/Clean)
     body_verts = [
         (left, bottom), (left, top),
         (right - fold, top), (right, top - fold),
         (right, bottom), (left, bottom),
     ]
-    ax.add_patch(patches.PathPatch(Path(body_verts, [Path.MOVETO, Path.LINETO, Path.LINETO, Path.LINETO, Path.LINETO, Path.CLOSEPOLY]), 
+    ax.add_patch(patches.PathPatch(Path(body_verts, [Path.MOVETO, Path.LINETO, Path.LINETO, Path.LINETO, Path.LINETO, Path.CLOSEPOLY]),
                                   facecolor='#FFFFFF', edgecolor=accent_color, lw=1.5, zorder=3))
-    
+
     # 3. The Fold (Triangle - Accent color or shaded)
     fold_verts = [(right - fold, top), (right - fold, top - fold), (right, top - fold), (right - fold, top)]
-    ax.add_patch(patches.PathPatch(Path(fold_verts, [Path.MOVETO, Path.LINETO, Path.LINETO, Path.CLOSEPOLY]), 
+    ax.add_patch(patches.PathPatch(Path(fold_verts, [Path.MOVETO, Path.LINETO, Path.LINETO, Path.CLOSEPOLY]),
                                   facecolor=accent_color, edgecolor='none', zorder=4))
-    
+
     # 4. Content lines (simulated text)
     for i in range(3):
         line_y = bottom + (i + 1) * (h / 5)
         ax.plot([left + w/4, right - w/4], [line_y, line_y], color='#BCCCDC', lw=0.8, zorder=5)
 
 def plot_node(state: AgentState) -> dict:
-    print("[UI:UPDATE] Generating Prestigeous Conference Infographic...")
-    
+    print("[UI:UPDATE] Generating Lineage Diagram...")
+
     if not state.history:
         print("[UI:UPDATE] No lineage history to plot.")
         return {}
@@ -279,15 +293,15 @@ def plot_node(state: AgentState) -> dict:
     first_paper = state.history[0].current_paper
     all_papers.append(first_paper)
     seen_ids.add(first_paper.paper_id)
-    
+
     for step in state.history:
         if step.parent_paper.paper_id not in seen_ids:
             all_papers.append(step.parent_paper)
             seen_ids.add(step.parent_paper.paper_id)
-    
+
     chronological_papers = list(reversed(all_papers))
     num_nodes = len(chronological_papers)
-    
+
     # 2. Conference Palette (Prestige & Clarity)
     BG_COLOR = "#FFFFFF"       # Pristine White
     PRIMARY_BLUE = "#102A43"   # Deep Professional Blue
@@ -295,38 +309,38 @@ def plot_node(state: AgentState) -> dict:
     TEXT_GRAY = "#334E68"      # Slate for main text
     META_GRAY = "#627D98"      # Muted slate for metadata
     LINE_GRAY = "#D9E2EC"      # Light track
-    
+
     plt.rcParams['font.family'] = 'sans-serif'
     fig, ax = plt.subplots(figsize=(22, 10), facecolor=BG_COLOR)
     ax.set_facecolor(BG_COLOR)
-    
+
     # 3. The Central Lineage Path
     ax.plot([0, num_nodes - 1], [0, 0], color=LINE_GRAY, lw=2, zorder=0)
     ax.scatter(range(num_nodes), [0]*num_nodes, color=PRIMARY_BLUE, s=50, zorder=2)
-    
+
     # 4. Draw Nodes (Milestones)
     for i, paper in enumerate(chronological_papers):
         x = i
         is_target = (i == num_nodes - 1)
         is_root = (i == 0)
-        
+
         # Draw Icon
         accent = ACCENT_BLUE if not is_root else "#F0B429" # Gold for Root
         draw_paper_icon(ax, x, 0, 0.1, "#FFFFFF", accent)
-        
+
         # Label Positioning (Alternating)
         is_top = (i % 2 == 0)
         y_label = 0.35 if is_top else -0.35
         va = 'bottom' if is_top else 'top'
-        
+
         # Vertical Connector
         ax.plot([x, x], [0.08 if is_top else -0.08, y_label], color=LINE_GRAY, lw=1.5, ls='-', zorder=1)
-        
+
         # Title
         title_wrapped = textwrap.fill(paper.title or "Unknown Title", width=28)
-        ax.text(x, y_label, title_wrapped, color=PRIMARY_BLUE, fontsize=10, 
+        ax.text(x, y_label, title_wrapped, color=PRIMARY_BLUE, fontsize=10,
                 fontweight='bold', ha='center', va=va, zorder=6)
-        
+
         # Metadata Badge
         meta_y = y_label + (0.18 if is_top else -0.18)
         if not is_top:
@@ -334,15 +348,15 @@ def plot_node(state: AgentState) -> dict:
             meta_y = y_label - (0.05 * num_lines + 0.12)
 
         meta_text = f"{paper.year or 'N/A'}  •  {paper.citation_count:,} CITATIONS"
-        ax.text(x, meta_y, meta_text, color=META_GRAY, fontsize=8, 
+        ax.text(x, meta_y, meta_text, color=META_GRAY, fontsize=8,
                 fontweight='600', ha='center', va=va, zorder=6,
                 bbox=dict(facecolor='#F0F4F8', edgecolor='none', boxstyle='round,pad=0.4'))
 
     # 5. Header & Branding
-    plt.title(f"SCIENTIFIC LINEAGE REPORT: {state.target_topic.upper()}", 
+    plt.title(f"SCIENTIFIC LINEAGE REPORT: {state.target_topic.upper()}",
               fontsize=24, fontweight='900', pad=50, color=PRIMARY_BLUE, loc='center')
-    
-    ax.text(0.5, 1.05, "METHODOLOGICAL EVOLUTION AND INTELLECTUAL ANCESTRY", 
+
+    ax.text(0.5, 1.05, "METHODOLOGICAL EVOLUTION AND INTELLECTUAL ANCESTRY",
             ha='center', transform=ax.transAxes, fontsize=12, color=ACCENT_BLUE, fontweight='bold')
 
     # 6. Cleanup
@@ -356,13 +370,17 @@ def plot_node(state: AgentState) -> dict:
     filename = f"trace_{state.trace_id}.png"
     artifact_path = os.path.join(base_dir, "artifacts", filename)
     os.makedirs(os.path.dirname(artifact_path), exist_ok=True)
-    
+
     plt.savefig(artifact_path, dpi=300, bbox_inches='tight', facecolor=BG_COLOR)
     plt.close()
-    
+
     print(f"[UI:IMAGE] {artifact_path}")
     final_text = state.final_summary if state.final_summary else f"Trace complete for '{state.target_topic}'."
-    print(f"[UI:FINAL] {final_text}")
+    # Task 10: Multi-line support via escaping
+    # We replace actual newlines with literal '\n' characters so the bridge can
+    # parse the entire summary as a single line from stdout.
+    escaped_final = final_text.replace('\n', '\\n')
+    print(f"[UI:FINAL] {escaped_final}")
     return {}
 
 def should_continue(state: AgentState) -> Literal["evaluate", "filter", "summary"]:
@@ -392,4 +410,3 @@ workflow.add_edge("summary", "plot")
 workflow.add_edge("plot", END)
 
 app = workflow.compile()
-    

@@ -10,6 +10,7 @@ from .schemas import Paper
 load_dotenv()
 
 SEMANTIC_SCHOLAR_API_KEY = os.getenv("SEMANTIC_SCHOLAR_API_KEY")
+MAX_REFERENCES_TO_FETCH = int(os.getenv("MAX_REFERENCES_TO_FETCH", "20"))
 BASE_URL = "https://api.semanticscholar.org/graph/v1"
 
 # Configure logging to not interfere with UI tags on stdout
@@ -70,7 +71,7 @@ def search_paper(query: str) -> Optional[Paper]:
 def get_references(paper_id: str) -> List[Paper]:
     """Fetch references for a given paper ID."""
     params = {
-        "limit": 20,
+        "limit": MAX_REFERENCES_TO_FETCH,
         "fields": "paperId,title,year,citationCount,abstract,url"
     }
     data = _make_request(f"/paper/{paper_id}/references", params=params)

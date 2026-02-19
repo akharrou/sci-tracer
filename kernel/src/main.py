@@ -3,6 +3,8 @@ import argparse
 import sys
 import logging
 import uuid
+import asyncio
+import traceback
 from dotenv import load_dotenv
 
 # Configure logging
@@ -16,8 +18,6 @@ from src.brain import app
 from src.schemas import AgentState
 
 load_dotenv()
-
-import asyncio
 
 def main():
     parser = argparse.ArgumentParser(description="Sci-Trace: Autonomous Scientific Lineage Mapper")
@@ -42,7 +42,6 @@ def main():
         try:
             await app.ainvoke(initial_state)
         except Exception as e:
-            import traceback
             error_msg = str(e)
             logger.error(f"Kernel Failure: {traceback.format_exc()}")
             print(f"[UI:ERROR] Kernel encountered an unhandled exception: {error_msg}")

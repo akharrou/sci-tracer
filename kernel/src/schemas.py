@@ -21,7 +21,7 @@ class LineageStep(BaseModel):
 
 class CitationDecision(BaseModel):
     """The structured decision returned by the LLM."""
-    selected_paper_id: str = Field(..., description="The Semantic Scholar ID of the chosen ancestor.")
+    selected_paper_id: Optional[str] = Field(None, description="The Semantic Scholar ID of the chosen ancestor.")
     reasoning_trace: str = Field(..., description="A detailed explanation of why this paper is the methodological root.")
     is_foundational: bool = Field(False, description="True if this paper is a seminal work (e.g., >10k citations) and we should stop.")
     confidence: float
