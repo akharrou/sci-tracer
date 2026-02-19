@@ -1,4 +1,6 @@
 import os
+import matplotlib
+matplotlib.use('Agg') # Force non-interactive backend for server-side plotting
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from matplotlib.path import Path
@@ -10,13 +12,10 @@ from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIChatModel
 from dotenv import load_dotenv
 
-from .schemas import AgentState, Paper, LineageStep, CitationDecision
+import asyncio
+import time
+from .schemas import AgentState, Paper, LineageStep, CitationDecision, EvaluationResult
 from .tools import search_paper, get_references
-
-from pydantic_ai.models.google import GoogleModel
-from pydantic_ai.providers.google import GoogleProvider
-
-load_dotenv()
 
 from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.providers.google import GoogleProvider
@@ -27,28 +26,63 @@ load_dotenv()
 MIN_CITATION_COUNT = int(os.getenv("MIN_CITATION_COUNT", "10"))
 FOUNDATIONAL_YEAR_THRESHOLD = int(os.getenv("FOUNDATIONAL_YEAR_THRESHOLD", "2010"))
 
+# Rate Limiting Configuration (Task 8)
+GEMINI_RPM_LIMIT = int(os.getenv("GEMINI_RPM_LIMIT", "20"))
+MAX_EVAL_BATCH_SIZE = int(os.getenv("MAX_EVAL_BATCH_SIZE", "5"))
+# Semaphore ensures we don't exceed the configured RPM in parallel batches
+rate_limiter = asyncio.Semaphore(GEMINI_RPM_LIMIT)
+
 # Initialize Pydantic AI Agent for reasoning using Google Gemini
 model = GoogleModel(
     "models/gemini-2.5-flash",
     provider=GoogleProvider(api_key=os.getenv("GEMINI_API_KEY")),
 )
 
-reasoning_agent = Agent(
+# Sequential Evaluation Agent (Evaluates ONE candidate at a time)
+eval_agent = Agent(
     model,
     output_type=CitationDecision,
     system_prompt=(
-        "You are a senior scientific researcher and intellectual historian. Your task is to identify the 'intellectual ancestor' "
-        "of a given paper from its list of references. "
-        "\n\n### REASONING PROTOCOL (Chain-of-Thought):\n"
-        "1. **Deconstruct**: Analyze the target paper's core methodology or conceptual innovation.\n"
-        "2. **Harvest**: Review the provided candidates. Look for the first mention of the target's core method.\n"
-        "3. **Validate**: Is this a casual citation or a foundational root? Discard 'Related Work' citations that don't provide the method.\n"
-        "4. **Select**: Choose the ONE reference that represents the true methodological precursor.\n"
-        "\n### CRITICAL RULES:\n"
-        f"- Only mark a paper as 'is_foundational' if it is a world-altering seminal work (e.g. Backpropagation, LSTM, CNN) from before {FOUNDATIONAL_YEAR_THRESHOLD}.\n"
-        "- Your reasoning_trace must include your step-by-step thinking process before the final decision."
+        "You are a rigorous scientific reviewer. You will be provided with a target paper and ONE candidate reference. "
+        "Your task is to decide if this reference is a primary intellectual or methodological ancestor of the target. "
+        "\n\n### EVALUATION PROTOCOL:\n"
+        "1. **Identify Method**: Does the candidate provide the methodological foundation for the target?\n"
+        "2. **Validate Citation**: Is this a casual mention or a foundational root?\n"
+        "3. **Match Confirmation**: If it is a match, you MUST set 'selected_paper_id' to the EXACT ID provided in the prompt. "
+        "Otherwise, leave 'selected_paper_id' empty.\n"
+        "\n### CRITICAL RULE:\n"
+        "Be inclusive of papers that represent the 'next step back' in the lineage. "
+        "Only mark 'is_foundational' for seminal pre-2010 works."
     )
 )
+
+# --- Evaluation Worker Function ---
+async def evaluate_worker(target: Paper, candidate: Paper) -> EvaluationResult:
+    """Async worker to evaluate a single (target, candidate) pair with rate limiting."""
+    prompt = (
+        f"Target Paper: {target.title} ({target.year})\n"
+        f"Abstract: {target.abstract}\n\n"
+        f"--- CANDIDATE TO EVALUATE ---\n"
+        f"ID: {candidate.paper_id}\n"
+        f"Title: {candidate.title} ({candidate.year})\n"
+        f"Citations: {candidate.citation_count}\n\n"
+        f"Question: Is this candidate the methodological ancestor of the target?"
+    )
+    
+    # Task 8: Acquire semaphore before making the API call
+    async with rate_limiter:
+        result = await eval_agent.run(prompt)
+        await asyncio.sleep(60 / GEMINI_RPM_LIMIT)
+        
+    decision = result.output
+    # Match confirmed if ID matches OR if the reasoning is highly confident
+    is_match = (decision.selected_paper_id == candidate.paper_id)
+    
+    return EvaluationResult(
+        paper=candidate,
+        decision=decision,
+        is_match=is_match
+    )
 
 def search_node(state: AgentState) -> dict:
     print(f"[UI:UPDATE] Initializing search for topic: '{state.target_topic}'...")
@@ -59,7 +93,6 @@ def search_node(state: AgentState) -> dict:
     print(f"[UI:UPDATE] Found root paper: {paper.title} ({paper.year})")
     return {
         "current_paper": paper,
-        "current_paper_id": paper.paper_id,
         "history": [],
         "depth": 0
     }
@@ -70,13 +103,10 @@ def filter_node(state: AgentState) -> dict:
     
     print(f"[UI:UPDATE] Fetching and filtering references for '{state.current_paper.title[:30]}...'")
     
-    references = get_references(state.current_paper_id)
+    references = get_references(state.current_paper.paper_id)
     if not references:
-        return {"filtered_candidates": [], "found_root": True}
+        return {"candidate_queue": [], "found_root": True}
     
-    # Apply heuristics: Citations > 10, Year < Current, Valid ID
-    # Note: Using >= Current is sometimes allowed if it's the same year, 
-    # but strictly "ancestors" should be older or contemporaneous at least.
     current_year = state.current_paper.year or 9999
     
     filtered = []
@@ -86,68 +116,75 @@ def filter_node(state: AgentState) -> dict:
         if p.citation_count < MIN_CITATION_COUNT: continue
         filtered.append(p)
     
-    # Sort by citations descending to give LLM the best first
+    # Sort and take top 15 (Queue for Parallel Evaluation batches)
     filtered.sort(key=lambda x: x.citation_count, reverse=True)
+    queue = filtered[:15]
     
-    print(f"[UI:UPDATE] Found {len(filtered)} valid candidates after heuristic filtering (Min Citations: {MIN_CITATION_COUNT}).")
+    print(f"[UI:UPDATE] Queued {len(queue)} candidates for parallel evaluation batches.")
     
     return {
-        "filtered_candidates": filtered,
-        "found_root": len(filtered) == 0
+        "candidate_queue": queue,
+        "found_root": len(queue) == 0
     }
 
-def reason_node(state: AgentState) -> dict:
-    if state.error or not state.current_paper:
-        return {}
+async def evaluate_node(state: AgentState) -> dict:
+    """Processes up to a batch of papers in parallel from the queue."""
+    if state.error or not state.candidate_queue:
+        return {"found_root": True}
     
     if state.depth >= state.max_depth:
         print(f"[UI:UPDATE] Reached maximum depth ({state.max_depth}). Stopping.")
         return {"found_root": True}
 
-    candidates = state.filtered_candidates
-    if not candidates:
-        print("[UI:UPDATE] No valid candidates for reasoning. Stopping.")
-        return {"found_root": True}
-
-    print(f"[UI:UPDATE] Reasoning over {len(candidates)} candidates for depth {state.depth + 1}...")
+    # Take the next batch (up to MAX_EVAL_BATCH_SIZE)
+    batch = state.candidate_queue[:MAX_EVAL_BATCH_SIZE]
+    remaining_queue = state.candidate_queue[MAX_EVAL_BATCH_SIZE:]
     
-    current_paper = state.current_paper
-    # Prepare prompt for LLM
-    ref_text = "\n".join([f"- ID: {p.paper_id} | Title: {p.title} | Year: {p.year} | Citations: {p.citation_count}" for p in candidates])
+    print(f"[UI:UPDATE] Starting parallel batch evaluation of {len(batch)} papers (Limit: {MAX_EVAL_BATCH_SIZE})...")
     
-    # ... (rest of reasoning node remains similar but uses candidates)
+    start_time = time.perf_counter()
     
-    prompt = f"Current Paper: {current_paper.title} ({current_paper.year})\nAbstract: {current_paper.abstract}\n\nReferences:\n{ref_text}\n\nSelect the best intellectual ancestor."
+    # --- CONCURRENT EXECUTION ---
+    tasks = [evaluate_worker(state.current_paper, p) for p in batch]
+    results = await asyncio.gather(*tasks)
     
-    result = reasoning_agent.run_sync(prompt)
-    decision = result.output
+    end_time = time.perf_counter()
+    duration = end_time - start_time
+    throughput = len(batch) / duration
     
-    # Find the selected paper object in the filtered candidates
-    selected_paper = next((p for p in candidates if p.paper_id == decision.selected_paper_id), None)
+    print(f"[UI:UPDATE] Batch complete. Throughput: {throughput:.2f} papers/sec (Processed {len(batch)} in {duration:.2f}s)")
     
-    if not selected_paper:
-        # Fallback to the one with most citations if LLM hallucinated an ID
-        selected_paper = sorted(candidates, key=lambda x: x.citation_count, reverse=True)[0]
-        decision.reasoning_trace = "LLM selected invalid ID, falling back to highest citation count."
-
-    # Create lineage step
-    step = LineageStep(
-        current_paper=current_paper,
-        parent_paper=selected_paper,
-        reasoning=decision.reasoning_trace,
-        confidence_score=decision.confidence
-    )
+    # Process results: Look for matches
+    matches = [r for r in results if r.is_match]
     
-    # Update state
-    print(f"[UI:UPDATE] Identified ancestor: {selected_paper.title} ({selected_paper.year})")
-    
-    return {
-        "current_paper": selected_paper,
-        "current_paper_id": selected_paper.paper_id,
-        "depth": state.depth + 1,
-        "history": state.history + [step],
-        "found_root": decision.is_foundational or (selected_paper.year and selected_paper.year < FOUNDATIONAL_YEAR_THRESHOLD)
-    }
+    if matches:
+        # If multiple matches, pick the one with highest confidence
+        best_match = sorted(matches, key=lambda x: x.decision.confidence, reverse=True)[0]
+        
+        print(f"[UI:UPDATE] Ancestor Confirmed: {best_match.paper.title} ({best_match.paper.year})")
+        step = LineageStep(
+            current_paper=state.current_paper,
+            parent_paper=best_match.paper,
+            reasoning=best_match.decision.reasoning_trace,
+            confidence_score=best_match.decision.confidence
+        )
+        return {
+            "current_paper": best_match.paper,
+            "depth": state.depth + 1,
+            "history": state.history + [step],
+            "candidate_queue": [], # Found ancestor at this level, clear queue
+            "found_root": best_match.decision.is_foundational or (best_match.paper.year and best_match.paper.year < FOUNDATIONAL_YEAR_THRESHOLD)
+        }
+    else:
+        # No match in this batch
+        print(f"[UI:UPDATE] No ancestor found in this batch of {len(batch)}.")
+        if not remaining_queue:
+            print("[UI:UPDATE] All queued candidates evaluated. No ancestor found.")
+            return {"candidate_queue": [], "found_root": True}
+        
+        return {
+            "candidate_queue": remaining_queue
+        }
 
 summary_agent = Agent(
     model,
@@ -328,24 +365,29 @@ def plot_node(state: AgentState) -> dict:
     print(f"[UI:FINAL] {final_text}")
     return {}
 
-def should_continue(state: AgentState) -> Literal["filter", "summary"]:
+def should_continue(state: AgentState) -> Literal["evaluate", "filter", "summary"]:
     if state.error or state.found_root:
         return "summary"
-    return "filter"
+    if not state.candidate_queue:
+        # If queue is empty but we aren't at root, it means we found an ancestor
+        # and need to move to the next level of the search.
+        return "filter"
+    # Otherwise, continue processing the current queue
+    return "evaluate"
 
 # Define the graph
 workflow = StateGraph(AgentState)
 
 workflow.add_node("search", search_node)
 workflow.add_node("filter", filter_node)
-workflow.add_node("reason", reason_node)
+workflow.add_node("evaluate", evaluate_node)
 workflow.add_node("summary", summary_node)
 workflow.add_node("plot", plot_node)
 
 workflow.add_edge(START, "search")
 workflow.add_edge("search", "filter")
-workflow.add_edge("filter", "reason")
-workflow.add_conditional_edges("reason", should_continue)
+workflow.add_edge("filter", "evaluate")
+workflow.add_conditional_edges("evaluate", should_continue)
 workflow.add_edge("summary", "plot")
 workflow.add_edge("plot", END)
 

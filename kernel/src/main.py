@@ -17,9 +17,7 @@ from src.schemas import AgentState
 
 load_dotenv()
 
-import uuid
-
-# ... (imports)
+import asyncio
 
 def main():
     parser = argparse.ArgumentParser(description="Sci-Trace: Autonomous Scientific Lineage Mapper")
@@ -40,14 +38,17 @@ def main():
     )
 
     # Execute graph
-    try:
-        app.invoke(initial_state)
-    except Exception as e:
-        import traceback
-        error_msg = str(e)
-        logger.error(f"Kernel Failure: {traceback.format_exc()}")
-        print(f"[UI:ERROR] Kernel encountered an unhandled exception: {error_msg}")
-        sys.exit(1)
+    async def run_graph():
+        try:
+            await app.ainvoke(initial_state)
+        except Exception as e:
+            import traceback
+            error_msg = str(e)
+            logger.error(f"Kernel Failure: {traceback.format_exc()}")
+            print(f"[UI:ERROR] Kernel encountered an unhandled exception: {error_msg}")
+            sys.exit(1)
+
+    asyncio.run(run_graph())
 
 if __name__ == "__main__":
     main()
