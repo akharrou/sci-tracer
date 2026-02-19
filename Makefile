@@ -14,6 +14,16 @@ install:
 	@echo "📦 Installing Host dependencies..."
 	cd host && npm install
 
+test-units:
+	@echo "🧪 Running Python Unit Tests..."
+	@cd kernel && . .venv/bin/activate && \
+	export PYTHONPATH=$$PYTHONPATH:. && \
+	python -m unittest discover tests
+
+test-host:
+	@echo "🧪 Running Host Logic Simulation..."
+	@node host/tests/simulate_host.js
+
 test:
 	@echo "🚀 Running Trace for topic: '$(TOPIC)'..."
 	@cd kernel && . .venv/bin/activate && \
