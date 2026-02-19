@@ -1,0 +1,8 @@
+.env
+host/logs
+host/node_modules
+host/app.log
+kernel/artifacts
+terraform.tfstate
+terraform.tfvars
+infra/.terraform/
