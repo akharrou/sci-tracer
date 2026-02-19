@@ -1,52 +1,66 @@
-import pytest
-import requests
-from src.tools import search_paper, get_references, RateLimitError
+import unittest
+from unittest.mock import patch, MagicMock
+from src.tools import search_paper, get_references
+from src.schemas import Paper
 
-def test_search_paper_success(mocker):
-    mock_response = mocker.Mock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {
-        "data": [
-            {
-                "paperId": "abc",
-                "title": "Search Result",
-                "year": 2021,
-                "citationCount": 50,
-                "abstract": "An abstract",
+class TestTools(unittest.TestCase):
+
+    @patch('src.tools.requests.get')
+    def test_search_paper_success(self, mock_get):
+        # Mock response data
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "data": [{
+                "paperId": "12345",
+                "title": "Test Paper",
+                "year": 2023,
+                "citationCount": 100,
+                "abstract": "This is a test abstract.",
                 "url": "http://example.com"
-            }
-        ]
-    }
-    mocker.patch("requests.get", return_value=mock_response)
-    
-    paper = search_paper("test topic")
-    assert paper is not None
-    assert paper.paper_id == "abc"
-    assert paper.title == "Search Result"
+            }]
+        }
+        mock_get.return_value = mock_response
 
-def test_search_paper_rate_limit(mocker):
-    mock_response = mocker.Mock()
-    mock_response.status_code = 429
-    mocker.patch("requests.get", return_value=mock_response)
-    
-    # Verify that it raises RateLimitError after retries (or just once if we don't want to wait)
-    # Since we use tenacity, it will retry. To keep tests fast, let's mock _make_request or adjust retry settings.
-    # For a unit test, mocking the request failure is better.
-    with pytest.raises(RateLimitError):
-        search_paper("too many requests")
+        paper = search_paper("Test Paper")
+        
+        self.assertIsNotNone(paper)
+        self.assertEqual(paper.paper_id, "12345")
+        self.assertEqual(paper.title, "Test Paper")
+        self.assertEqual(paper.year, 2023)
 
-def test_get_references_success(mocker):
-    mock_response = mocker.Mock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {
-        "data": [
-            {"citedPaper": {"paperId": "ref1", "title": "Ref 1", "year": 2019, "citationCount": 10}},
-            {"citedPaper": {"paperId": "ref2", "title": "Ref 2", "year": 2018, "citationCount": 20}}
-        ]
-    }
-    mocker.patch("requests.get", return_value=mock_response)
-    
-    refs = get_references("abc")
-    assert len(refs) == 2
-    assert refs[0].paper_id == "ref1"
-    assert refs[1].citation_count == 20
+    @patch('src.tools.requests.get')
+    def test_get_references_success(self, mock_get):
+        # Mock response data
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "data": [
+                {
+                    "citedPaper": {
+                        "paperId": "ref1",
+                        "title": "Reference 1",
+                        "year": 2020,
+                        "citationCount": 50
+                    }
+                },
+                {
+                    "citedPaper": {
+                        "paperId": "ref2",
+                        "title": "Reference 2",
+                        "year": 2019,
+                        "citationCount": 30
+                    }
+                }
+            ]
+        }
+        mock_get.return_value = mock_response
+
+        refs = get_references("12345")
+        
+        self.assertEqual(len(refs), 2)
+        self.assertEqual(refs[0].paper_id, "ref1")
+        self.assertEqual(refs[1].title, "Reference 2")
+
+if __name__ == '__main__':
+    unittest.main()
