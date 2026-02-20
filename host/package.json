@@ -3,13 +3,14 @@
   "version": "0.1.0",
   "main": "index.js",
   "scripts": {
-    "test": "node tests/v2-unit-tests.js"
+    "test": "node tests/v2-unit-tests.js && node tests/test-ui-platform.js"
   },
   "keywords": [],
   "author": "akharrou <36056254+akharrou@users.noreply.github.com>",
   "license": "MIT",
   "description": "",
   "dependencies": {
+    "@slack/bolt": "^4.6.0",
     "axios": "^1.7.9",
     "discord.js": "^14.25.1",
     "dotenv": "^17.3.1"

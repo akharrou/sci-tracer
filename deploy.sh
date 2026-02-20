@@ -28,6 +28,7 @@ fi
 echo "📦 Syncing core files..."
 rsync -avz -e "ssh -i $KEY" \
     --exclude 'kernel/.venv' \
+    --exclude 'kernel/lib' \
     --exclude 'host/node_modules' \
     --exclude 'kernel/artifacts/*' \
     --exclude 'host/logs/*' \
@@ -49,3 +50,4 @@ ssh -i $KEY $USER@$IP "bash /home/ubuntu/setup-app.sh"
 
 echo "✅ Deployment complete!"
 echo "👉 Note: Don't forget to manually upload your .env file to $REMOTE_PATH/.env"
+echo "   You can do so securely using: scp -i $KEY .env $USER@$IP:$REMOTE_PATH/.env"

@@ -34,6 +34,9 @@ MIN_CITATION_COUNT = int(os.getenv("MIN_CITATION_COUNT", "10"))
 # The foundational threshold stops the search if we reach a paper from an era
 # where methodological roots are generally considered "well-established" for most AI topics.
 FOUNDATIONAL_YEAR_THRESHOLD = int(os.getenv("FOUNDATIONAL_YEAR_THRESHOLD", "2010"))
+# Maximum character length for the final narrative summary to ensure compatibility with 
+# Discord/Slack UI limits.
+MAX_SUMMARY_LENGTH = int(os.getenv("MAX_SUMMARY_LENGTH", "2950"))
 
 # --- CONCURRENCY & RATE LIMITING ---
 # To balance speed with API stability, we process evaluations in parallel batches.

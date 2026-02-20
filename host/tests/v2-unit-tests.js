@@ -59,64 +59,52 @@ async function testBridgeParsing() {
 
 /**
  * Test 2: UI Abstraction Logic
- * Verifies that the DiscordUI wrapper correctly routes updates to 
- * either interactions or standard messages.
+ * Verifies that the new platform-specific UI classes correctly route 
+ * updates to either Discord or Slack.
  */
+const { DiscordUI, SlackUI } = require('../src/ui');
+
 async function testUIAbstraction() {
-    console.log('Testing DiscordUI Abstraction Logic...');
+    console.log('Testing Discord/Slack UI Abstractions...');
     
-    const mockInteraction = {
-        editReply: async (val) => { mockInteraction.lastVal = val; return val; },
-        followUp: async (val) => { mockInteraction.lastFollowUp = val; return val; }
-    };
-
-    const mockMessage = {
-        reply: async (val) => { 
-            const msg = { 
-                edit: async (v) => { msg.lastVal = v; },
-                lastVal: val
-            };
-            mockMessage.lastReply = val; 
-            mockMessage.statusMessage = msg;
-            return msg; 
-        },
-        channel: { send: async (val) => { mockMessage.lastSend = val; } }
-    };
-
+    // 1. Test DiscordUI
     const mockChannel = {
-        send: async (val) => { 
-            mockChannel.lastSend = val; 
-            return { edit: async (v) => { mockChannel.lastEdit = v; } }; 
+        sent: [],
+        async send(content) { 
+            const msg = { content, async edit(c) { msg.content = c; } };
+            this.sent.push(msg); 
+            return msg; 
         }
     };
+    const discordUI = new DiscordUI(null, mockChannel);
+    await discordUI.updateStatus('Discord-1');
+    assert.strictEqual(mockChannel.sent[0].content, 'Discord-1');
+    
+    discordUI.lastUpdateAt = 0; // Reset rate-limiter
+    await discordUI.updateStatus('Discord-2');
+    assert.strictEqual(mockChannel.sent[0].content, 'Discord-2');
 
-    // Simulation of the logic inside index.js
-    const simulateUIUpdate = async (target, channel, isInteraction, text, hasStatusMessage) => {
-        if (isInteraction) {
-            await target.editReply(text);
-        } else {
-            if (!hasStatusMessage) {
-                target.statusMessage = await (channel || target.channel).send(text);
-            } else {
-                await target.statusMessage.edit(text);
-            }
+    // 2. Test SlackUI
+    const mockSlackClient = {
+        posts: [],
+        async postMessage(payload) {
+            this.posts.push(payload);
+            return { ts: '123' };
+        },
+        async update(payload) {
+            this.posts[0].text = payload.text;
+            return { ok: true };
         }
     };
+    const slackUI = new SlackUI({ chat: mockSlackClient }, 'C123');
+    await slackUI.updateStatus('Slack-1');
+    assert.strictEqual(mockSlackClient.posts[0].text, 'Slack-1');
 
-    // Test Path A (Slash Command)
-    await simulateUIUpdate(mockInteraction, null, true, 'Status 1', false);
-    assert.strictEqual(mockInteraction.lastVal, 'Status 1');
+    slackUI.lastUpdateAt = 0; // Reset rate-limiter
+    await slackUI.updateStatus('Slack-2');
+    assert.strictEqual(mockSlackClient.posts[0].text, 'Slack-2');
 
-    // Test Path B (Conversational Message)
-    await simulateUIUpdate(mockMessage, null, false, 'Status A', false);
-    assert.strictEqual(mockMessage.lastSend, 'Status A');
-
-    // Test Path C (Handoff Channel)
-    const mockHandoff = {};
-    await simulateUIUpdate(mockHandoff, mockChannel, false, 'Status C', false);
-    assert.strictEqual(mockChannel.lastSend, 'Status C');
-
-    console.log('✅ UI Abstraction test passed.');
+    console.log('✅ UI Abstraction tests passed.');
 }
 
 /**

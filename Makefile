@@ -21,8 +21,12 @@ test-units:
 	python -m unittest discover tests
 
 test-host:
-	@echo "🧪 Running Host Logic Simulation..."
-	@node host/tests/simulate_host.js
+	@echo "🧪 Running Host Unit Tests (Discord & Slack)..."
+	@node host/tests/v2-unit-tests.js
+	@node host/tests/test-ui-platform.js
+
+test-all: test-units test-host
+	@echo "🎉 All system tests passed!"
 
 test:
 	@echo "🚀 Running Trace for topic: '$(TOPIC)'..."

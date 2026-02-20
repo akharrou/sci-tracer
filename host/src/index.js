@@ -2,8 +2,8 @@
  * Sci-Trace Host (The Body)
  * ------------------------
  * This file is the primary orchestrator of the Sci-Trace system.
- * It manages two distinct entry points (Deterministic Slash Commands and 
- * Agentic Conversational Mentions) and routes them to the shared Python Kernel.
+ * It manages multiple entry points (Discord, Slack, OpenClaw) 
+ * and routes them to the shared Python Kernel.
  */
 
 const path = require('path');
@@ -11,6 +11,7 @@ const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
 
 const fs = require('fs');
+const http = require('node:http');
 const {
     Client,
     GatewayIntentBits,
@@ -21,7 +22,10 @@ const {
     AttachmentBuilder,
     EmbedBuilder
 } = require('discord.js');
+const { App } = require('@slack/bolt');
 
+// UI adapters for multi-platform support.
+const { DiscordUI, SlackUI } = require('./ui');
 // kernel_bridge manages the spawning and protocol parsing of the Python subprocess.
 const { spawnKernel } = require('./kernel-bridge');
 // openclaw provides the conversational intelligence layer.
@@ -29,9 +33,6 @@ const OpenClawClient = require('./openclaw');
 
 /**
  * LOGGING & OBSERVABILITY
- * -----------------------
- * We maintain an append-only log file to track system performance, 
- * user requests, and kernel failures in production.
  */
 const logsDir = path.resolve(__dirname, '../logs');
 if (!fs.existsSync(logsDir)) {
@@ -48,30 +49,23 @@ function logToFile(message) {
 }
 
 // System Constants & Capacity Controls
-const TOKEN = process.env.DISCORD_TOKEN;
-const CLIENT_ID = process.env.DISCORD_CLIENT_ID;
-const GUILD_ID = process.env.DISCORD_GUILD_ID;
+const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
+const DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID;
+const DISCORD_GUILD_ID = process.env.DISCORD_GUILD_ID;
 
-// To prevent resource exhaustion on the EC2 instance, we limit 
-// the number of active Python processes.
+const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
+const SLACK_SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET;
+const SLACK_APP_TOKEN = process.env.SLACK_APP_TOKEN;
+
 const MAX_CONCURRENT_TRACES = Number.parseInt(process.env.MAX_CONCURRENT_TRACES ?? '2', 10);
-const TRACE_CONCURRENCY_LIMIT = Number.isFinite(MAX_CONCURRENT_TRACES) && MAX_CONCURRENT_TRACES > 0
-    ? MAX_CONCURRENT_TRACES
-    : 2;
+const TRACE_CONCURRENCY_LIMIT = Math.max(1, MAX_CONCURRENT_TRACES);
 const MAX_TRACE_QUEUE_LENGTH = Number.parseInt(process.env.MAX_TRACE_QUEUE_LENGTH ?? '20', 10);
-const TRACE_QUEUE_LIMIT = Number.isFinite(MAX_TRACE_QUEUE_LENGTH) && MAX_TRACE_QUEUE_LENGTH > 0
-    ? MAX_TRACE_QUEUE_LENGTH
-    : 20;
+const TRACE_QUEUE_LIMIT = Math.max(1, MAX_TRACE_QUEUE_LENGTH);
 
 let activeTraces = 0;
 const traceQueue = [];
 
-if (!TOKEN || !CLIENT_ID) {
-    console.error("CRITICAL ERROR: Missing DISCORD_TOKEN or DISCORD_CLIENT_ID in .env");
-    process.exit(1);
-}
-
-// Initialize the OpenClaw conversational client.
+// Initialize OpenClaw
 const openclaw = new OpenClawClient({
     apiKey: process.env.OPENCLAW_API_KEY,
     baseUrl: process.env.OPENCLAW_BASE_URL,
@@ -80,146 +74,237 @@ const openclaw = new OpenClawClient({
 
 /**
  * DISCORD CLIENT INITIALIZATION
- * -----------------------------
- * GuildMessages and MessageContent are required for OpenClaw to 
- * 'hear' and 'understand' mentions in the chat.
  */
-const client = new Client({ 
-    intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent
-    ] 
-});
+let discordClient = null;
+if (DISCORD_TOKEN && DISCORD_CLIENT_ID) {
+    discordClient = new Client({ 
+        intents: [
+            GatewayIntentBits.Guilds,
+            GatewayIntentBits.GuildMessages,
+            GatewayIntentBits.MessageContent
+        ] 
+    });
 
-/**
- * SLASH COMMAND REGISTRATION
- * --------------------------
- * Registers the /trace command with Discord's API.
- */
-const commands = [
-    new SlashCommandBuilder()
-        .setName('trace')
-        .setDescription('Trace the intellectual lineage of a scientific topic')
-        .addStringOption(option =>
-            option.setName('topic')
-                .setDescription('The topic or paper to trace (e.g., Self-RAG)')
-                .setRequired(true))
-].map(command => command.toJSON());
+    const discordCommands = [
+        new SlashCommandBuilder()
+            .setName('trace')
+            .setDescription('Trace the intellectual lineage of a scientific topic')
+            .addStringOption(option =>
+                option.setName('topic')
+                    .setDescription('The topic or paper to trace (e.g., Self-RAG)')
+                    .setRequired(true))
+    ].map(command => command.toJSON());
 
-const rest = new REST({ version: '10' }).setToken(TOKEN);
+    const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
 
-async function registerCommands() {
-    try {
-        logToFile('Started refreshing application (/) commands.');
-        if (GUILD_ID) {
-            await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
-        } else {
-            await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
-        }
-        logToFile('Successfully reloaded application (/) commands.');
-    } catch (error) {
-        logToFile(`ERROR: Command registration failed: ${error.message}`);
-    }
-}
-
-function sanitizeTopic(topic) {
-    // Sanitization prevents shell injection by stripping control characters.
-    return topic.replace(/[;&|`$(){}\[\]\n\r]/g, '').trim();
-}
-
-const http = require('node:http');
-
-// ... (existing imports)
-
-/**
- * UI ABSTRACTION LAYER (DiscordUI)
- * --------------------------------
- * Refactored to support:
- * 1. Interactions (Slash Commands)
- * 2. Messages (Conversational Mentions)
- * 3. Raw Channels (Handoff from OpenClaw)
- */
-class DiscordUI {
-    constructor(target, channel = null) {
-        this.target = target; // interaction, message, or null
-        this.channel = channel || target?.channel;
-        this.isInteraction = !!target?.editReply;
-        this.statusMessage = null;
-        this.lastUpdateAt = 0;
-    }
-
-    async updateStatus(text) {
-        const now = Date.now();
-        if (now - this.lastUpdateAt < 1000) return;
-        this.lastUpdateAt = now;
-
-        if (this.isInteraction) {
-            await this.target.editReply(text).catch(e => logToFile(`UI Interaction Error: ${e.message}`));
-        } else {
-            if (!this.statusMessage) {
-                // If we don't have a status message yet, create one.
-                this.statusMessage = await this.channel.send(text).catch(e => logToFile(`UI Channel Error: ${e.message}`));
+    async function registerDiscordCommands() {
+        try {
+            logToFile('Refreshing Discord (/) commands.');
+            if (DISCORD_GUILD_ID) {
+                await rest.put(Routes.applicationGuildCommands(DISCORD_CLIENT_ID, DISCORD_GUILD_ID), { body: discordCommands });
             } else {
-                await this.statusMessage.edit(text).catch(e => logToFile(`UI Edit Error: ${e.message}`));
+                await rest.put(Routes.applicationCommands(DISCORD_CLIENT_ID), { body: discordCommands });
+            }
+            logToFile('Successfully reloaded Discord (/) commands.');
+        } catch (error) {
+            logToFile(`ERROR: Discord Command registration failed: ${error.message}`);
+        }
+    }
+
+    discordClient.once(Events.ClientReady, c => {
+        logToFile(`SYSTEM: Discord logged in as ${c.user.tag}!`);
+        registerDiscordCommands();
+    });
+
+    discordClient.on('interactionCreate', async interaction => {
+        if (!interaction.isChatInputCommand()) return;
+        if (interaction.commandName === 'trace') {
+            const topic = sanitizeTopic(interaction.options.getString('topic'));
+            const ui = new DiscordUI(interaction);
+            await handleTraceRequest(ui, topic, `Discord:${interaction.user.tag}`, () => interaction.deferReply());
+        }
+    });
+
+    discordClient.on('messageCreate', async message => {
+        if (message.author.bot || !message.mentions.has(discordClient.user)) return;
+        const content = message.content.replace(`<@!${discordClient.user.id}>`, '').replace(`<@${discordClient.user.id}>`, '').trim();
+        if (!content) return message.reply("How can I help you with your research?");
+        
+        const ui = new DiscordUI(message);
+        await handleConversationalRequest(ui, content, `Discord:${message.author.tag}`);
+    });
+
+    discordClient.login(DISCORD_TOKEN).catch(e => logToFile(`Discord Login Error: ${e.message}`));
+}
+
+/**
+ * SLACK CLIENT INITIALIZATION
+ */
+let slackApp = null;
+if (SLACK_BOT_TOKEN && SLACK_SIGNING_SECRET) {
+    slackApp = new App({
+        token: SLACK_BOT_TOKEN,
+        signingSecret: SLACK_SIGNING_SECRET,
+        socketMode: !!SLACK_APP_TOKEN,
+        appToken: SLACK_APP_TOKEN
+    });
+
+    slackApp.command('/trace', async ({ command, ack, say, client }) => {
+        await ack();
+        const topic = sanitizeTopic(command.text);
+        if (!topic) return say("Please provide a topic. Usage: `/trace Self-RAG`.");
+        
+        const ui = new SlackUI(client, command.channel_id);
+        await handleTraceRequest(ui, topic, `Slack:${command.user_name}`);
+    });
+
+    slackApp.event('app_mention', async ({ event, say, client }) => {
+        const content = event.text.replace(/<@.*?>/g, '').trim();
+        logToFile(`[SLACK MENTION EVENT]: User=${event.user} Channel=${event.channel} Text="${event.text}" Content="${content}"`);
+        if (!content) return say("I'm listening. What shall we research?");
+
+        const ui = new SlackUI(client, event.channel, event.thread_ts || event.ts);
+        await handleConversationalRequest(ui, content, `Slack:${event.user}`);
+    });
+
+    slackApp.error(async (error) => {
+        logToFile(`SLACK APP ERROR: ${error.message}`);
+    });
+
+    slackApp.message(async ({ message, client, say }) => {
+        // Skip bot messages
+        if (message.bot_id || message.subtype) return;
+
+        const isDM = message.channel && message.channel.startsWith('D');
+        logToFile(`[SLACK MESSAGE EVENT]: User=${message.user} Channel=${message.channel} DM=${isDM} Text="${message.text}"`);
+
+        // If it's a DM, handle it directly
+        if (isDM) {
+            const ui = new SlackUI(client, message.channel, message.thread_ts || message.ts);
+            await handleConversationalRequest(ui, message.text, `Slack:DM:${message.user}`);
+        }
+        // If it's in a channel, we only handle it if it wasn't caught by app_mention 
+        // but still looks like a mention (e.g., text contains the bot's name or ID)
+        else if (message.text && (message.text.includes(`<@${client.botId}>`) || message.text.toLowerCase().includes('research assistant'))) {
+            logToFile(`[SLACK PSEUDO-MENTION]: Handling channel message as mention.`);
+            const ui = new SlackUI(client, message.channel, message.thread_ts || message.ts);
+            const cleanText = message.text.replace(/<@.*?>/g, '').replace(/research assistant/gi, '').trim();
+            await handleConversationalRequest(ui, cleanText, `Slack:Channel:${message.user}`);
+        }
+    });
+
+    slackApp.start().then(() => logToFile('SYSTEM: Slack Bolt app is running!')).catch(e => logToFile(`Slack Start Error: ${e.message}`));
+}
+
+/**
+ * COMMON HANDLERS
+ */
+function sanitizeTopic(topic) {
+    return (topic || '').replace(/[;&|`$(){}\[\]\n\r]/g, '').trim();
+}
+
+async function handleTraceRequest(ui, topic, userLabel, preAction = null) {
+    logToFile(`[TRACE REQUEST]: ${userLabel} -> Topic: "${topic}"`);
+    if (preAction) await preAction();
+
+    if (activeTraces >= TRACE_CONCURRENCY_LIMIT) {
+        if (traceQueue.length >= TRACE_QUEUE_LIMIT) {
+            return ui.sendError("The research queue is full. Please try again later.");
+        }
+        await enqueueTrace(ui, topic);
+        return;
+    }
+
+    activeTraces += 1;
+    startTrace(ui, topic);
+}
+
+async function handleConversationalRequest(ui, content, userLabel) {
+    logToFile(`[CONVERSATION]: ${userLabel} -> "${content}"`);
+    try {
+        const response = await openclaw.chat([{ role: 'user', content: content }], []);
+        let triggeredTopic = null;
+
+        logToFile(`[AGENT RESPONSE]: ${response.content}`);
+
+        if (response.content) {
+            // Priority: Strict Tag Detection [TRACE: Topic]
+            const tagMatch = response.content.match(/\[TRACE: (.*?)\]/i);
+            if (tagMatch) {
+                triggeredTopic = sanitizeTopic(tagMatch[1]);
+            } 
+            // Fallback: Legacy Phrasing (if tag is somehow missed)
+            else if (response.content.toLowerCase().includes("research for") || response.content.toLowerCase().includes("lineage")) {
+                const match = response.content.match(/research for ['"`]?(.*?)['"`]?/i) || 
+                              response.content.match(/lineage of ['"`]?(.*?)['"`]?/i) ||
+                              response.content.match(/trace for ['"`]?(.*?)['"`]?/i);
+                if (match) triggeredTopic = sanitizeTopic(match[1].split('.')[0].split('\n')[0]);
             }
         }
-    }
 
-    async sendFinal(embed, files) {
-        if (this.isInteraction) {
-            await this.target.followUp({ embeds: [embed], files }).catch(e => logToFile(`UI Interaction Final Error: ${e.message}`));
+        if (triggeredTopic) {
+            logToFile(`[AGENT DECISION]: Triggering kernel for "${triggeredTopic}"`);
+            await handleTraceRequest(ui, triggeredTopic, `${userLabel} (Agent)`);
         } else {
-            await this.channel.send({ embeds: [embed], files }).catch(e => logToFile(`UI Channel Final Error: ${e.message}`));
-        }
-    }
+            // Clean up internal tags if they exist
+            let reply = (response.content || "I'm not sure how to assist with that.").replace(/\[TRACE: (.*?)\]/gi, '').trim();
+            
+            // Fallback Detection: If the agent mentioned lineage/trace but didn't match the regex
+            if (reply.toLowerCase().includes('lineage') || reply.toLowerCase().includes('trace')) {
+                // If the user's content was just a few words, assume the last word(s) are the topic
+                const words = content.split(' ');
+                const possibleTopic = words.length > 2 ? words.slice(-2).join(' ').replace(/[?]/g, '') : words[words.length - 1].replace(/[?]/g, '');
+                logToFile(`[AGENT FALLBACK]: Attempting to infer topic from query: "${possibleTopic}"`);
+                await handleTraceRequest(ui, possibleTopic, `${userLabel} (Inferred)`);
+            }
 
-    async sendError(text) {
-        const content = `❌ **Error:** ${text}`;
-        if (this.isInteraction) {
-            await this.target.followUp({ content, ephemeral: true }).catch(e => logToFile(`UI Error: ${e.message}`));
-        } else {
-            await this.channel.send(content).catch(e => logToFile(`UI Error: ${e.message}`));
+            if (reply.length > 2000) reply = reply.substring(0, 1900) + "... [Truncated]";
+            
+            // Use native platform reply instead of status update for standard chat
+            if (ui.target && ui.target.reply) {
+                await ui.target.reply(reply).catch(e => logToFile(`Reply Error: ${e.message}`));
+            } else if (ui.client && ui.client.chat) {
+                await ui.client.chat.postMessage({
+                    channel: ui.channelId,
+                    thread_ts: ui.threadTs,
+                    text: reply
+                }).catch(e => logToFile(`Slack Reply Error: ${e.message}`));
+            } else {
+                await ui.updateStatus(reply);
+            }
         }
+    } catch (err) {
+        logToFile(`AGENT ERROR: ${err.message}`);
+        await ui.sendError("I'm having trouble connecting to my reasoning brain.");
     }
 }
-
-// ... (enqueueTrace and startTrace remain mostly the same, using the new DiscordUI)
 
 /**
  * PRIVATE HANDOFF SERVER
- * ----------------------
- * Listens on localhost:3000 for trace requests from the OpenClaw Bot.
  */
-const HANDOFF_PORT = process.env.HANDOFF_PORT || 3000;
-
+const HANDOFF_PORT = process.env.HANDOFF_PORT || 18788; // Changed from 3000 to avoid conflict with Slack Bolt
 const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && req.url === '/trigger-trace') {
         let body = '';
         req.on('data', chunk => { body += chunk.toString(); });
         req.on('end', async () => {
             try {
-                const { topic, channelId } = JSON.parse(body);
-                logToFile(`[HANDOFF REQUEST]: Triggering trace for "${topic}" in channel ${channelId}`);
+                const { topic, channelId, platform, threadTs } = JSON.parse(body);
+                logToFile(`[HANDOFF REQUEST]: Topic="${topic}" Platform=${platform} Channel=${channelId}`);
 
-                if (!channelId || channelId === 'UNKNOWN') {
-                    throw new Error("Missing or invalid channel ID in handoff request. Ensure OpenClaw context is being passed.");
+                let ui = null;
+                if (platform === 'slack' && slackApp) {
+                    ui = new SlackUI(slackApp.client, channelId, threadTs);
+                } else if (discordClient) {
+                    const channel = await discordClient.channels.fetch(channelId);
+                    if (channel) ui = new DiscordUI(null, channel);
                 }
 
-                const channel = await client.channels.fetch(channelId);
-                if (!channel) throw new Error("Channel not found");
+                if (!ui) throw new Error(`Could not initialize UI for platform ${platform}`);
 
-                const ui = new DiscordUI(null, channel);
-                
-                if (activeTraces >= TRACE_CONCURRENCY_LIMIT) {
-                    await enqueueTrace(ui, topic);
-                } else {
-                    activeTraces += 1;
-                    startTrace(ui, topic); // Background execution
-                }
-
+                await handleTraceRequest(ui, topic, `Handoff:${platform}`);
                 res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ status: 'initiated', topic }));
+                res.end(JSON.stringify({ status: 'initiated' }));
             } catch (err) {
                 logToFile(`HANDOFF ERROR: ${err.message}`);
                 res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -227,209 +312,57 @@ const server = http.createServer(async (req, res) => {
             }
         });
     } else {
-        res.writeHead(404);
-        res.end();
+        res.writeHead(404).end();
     }
 });
+server.listen(HANDOFF_PORT, '127.0.0.1', () => logToFile(`SYSTEM: Private Handoff Server listening at 127.0.0.1:${HANDOFF_PORT}`));
 
-server.listen(HANDOFF_PORT, '127.0.0.1', () => {
-    logToFile(`SYSTEM: Private Handoff Server listening on 127.0.0.1:${HANDOFF_PORT}`);
-});
-
+/**
+ * KERNEL EXECUTION ENGINE
+ */
 async function enqueueTrace(ui, topic) {
     traceQueue.push({ ui, topic });
-    logToFile(`SYSTEM: Trace queued. Position ${traceQueue.length}.`);
-
-    await ui.updateStatus(
-        `⏳ Your trace is queued (position ${traceQueue.length}). You will receive updates shortly.`
-    );
+    logToFile(`SYSTEM: Trace queued. Pos: ${traceQueue.length}.`);
+    await ui.updateStatus(`⏳ Your trace is queued (position ${traceQueue.length}).`);
 }
 
 async function startTrace(ui, topic) {
-    /**
-     * The core execution flow. Spawns the kernel, handles events, 
-     * and manages the concurrency slots.
-     */
     let traceFinished = false;
     let pendingImagePath = null;
 
-    const finishTrace = (reason) => {
+    const finishTrace = () => {
         if (traceFinished) return;
         traceFinished = true;
         activeTraces = Math.max(0, activeTraces - 1);
-        logToFile(`SYSTEM: Trace slot released (${reason}).`);
-
-        // Check if there are pending jobs in the queue.
         if (traceQueue.length > 0 && activeTraces < TRACE_CONCURRENCY_LIMIT) {
-            const nextJob = traceQueue.shift();
+            const next = traceQueue.shift();
             activeTraces += 1;
-            startTrace(nextJob.ui, nextJob.topic).catch(err => {
-                logToFile(`QUEUE ERROR: ${err.message}`);
-                activeTraces = Math.max(0, activeTraces - 1);
-            });
+            startTrace(next.ui, next.topic);
         }
     };
 
-    await ui.updateStatus("🚀 Initializing Python Research Kernel...");
-
+    await ui.updateStatus("🚀 Initializing Research Kernel...");
     try {
-        // spawnKernel is an asynchronous bridge that parses stdout events.
         const result = await spawnKernel(topic, (event) => {
-            if (event.type === 'update') {
-                ui.updateStatus(`🔍 ${event.message}`);
-            } else if (event.type === 'image') {
-                pendingImagePath = event.path;
-            } else if (event.type === 'error') {
-                ui.sendError(event.message);
-            }
+            if (event.type === 'update') ui.updateStatus(`🔍 ${event.message}`);
+            else if (event.type === 'image') pendingImagePath = event.path;
+            else if (event.type === 'error') ui.sendError(event.message);
         });
-
-        // Construct the final visual report.
-        const embed = new EmbedBuilder()
-            .setTitle(`Scientific Lineage: ${topic}`)
-            .setDescription(result.summary)
-            .setColor(0x00AE86) // Success Green
-            .setTimestamp()
-            .setFooter({ text: 'Sci-Trace | Autonomous Research Agent' });
 
         const files = [];
         if (pendingImagePath && fs.existsSync(pendingImagePath)) {
-            const filename = path.basename(pendingImagePath);
-            const attachment = new AttachmentBuilder(pendingImagePath, { name: filename });
-            embed.setImage(`attachment://${filename}`);
-            files.push(attachment);
+            files.push(new AttachmentBuilder(pendingImagePath, { name: path.basename(pendingImagePath) }));
         }
 
-        await ui.sendFinal(embed, files);
-        finishTrace('complete');
+        const summary = result.summary || "Research analysis complete. No specific methodological summary was generated.";
+        await ui.sendFinal(summary, topic, files);
+        finishTrace();
     } catch (err) {
         logToFile(`KERNEL ERROR: ${err.message}`);
         await ui.sendError(err.message);
-        finishTrace('error');
+        finishTrace();
     }
 }
 
-/**
- * BOT STARTUP
- */
-client.once(Events.ClientReady, c => {
-    logToFile(`SYSTEM: Logged in as ${c.user.tag}!`);
-    registerCommands();
-});
-
-/**
- * PATH A: SLASH COMMAND HANDLER
- * ----------------------------
- * Handles deterministic requests triggered via /trace.
- */
-client.on('interactionCreate', async interaction => {
-    if (!interaction.isChatInputCommand()) return;
-
-    if (interaction.commandName === 'trace') {
-        const rawTopic = interaction.options.getString('topic');
-        const topic = sanitizeTopic(rawTopic);
-        const ui = new DiscordUI(interaction);
-
-        logToFile(`[USER REQUEST]: ${interaction.user.tag} -> Trace topic: "${topic}"`);
-
-        // Defer immediately to prevent Discord's 3-second timeout.
-        await interaction.deferReply();
-
-        if (activeTraces >= TRACE_CONCURRENCY_LIMIT) {
-            if (traceQueue.length >= TRACE_QUEUE_LIMIT) {
-                await interaction.editReply('⚠️ The queue is full right now. Please try again later.');
-                return;
-            }
-            await enqueueTrace(ui, topic);
-            return;
-        }
-
-        activeTraces += 1;
-        await startTrace(ui, topic);
-    }
-});
-
-/**
- * PATH B: CONVERSATIONAL (OPENCLAW) HANDLER
- * -----------------------------------------
- * Handles natural language mentions and routes them to the agentic brain.
- */
-client.on('messageCreate', async message => {
-    // Ignore self or other bots.
-    if (message.author.bot) return;
-    // Only respond if the bot is explicitly mentioned.
-    if (!message.mentions.has(client.user)) return;
-
-    const ui = new DiscordUI(message);
-    const content = message.content.replace(`<@!${client.user.id}>`, '').replace(`<@${client.user.id}>`, '').trim();
-
-    if (!content) {
-        await message.reply("Hello! How can I help you with your research today?");
-        return;
-    }
-
-    logToFile(`[OPENCLAW REQUEST]: ${message.author.tag} -> "${content}"`);
-
-    try {
-        // OpenClaw's conversational agent evaluates the message.
-        // It uses its discovered skills (from extraDirs) to decide how to respond.
-        // If a research trace is needed, it will call its native 'exec' tool 
-        // as instructed in the 'get-scientific-lineage' SKILL.md.
-        const response = await openclaw.chat(
-            [{ role: 'user', content: content }],
-            [] // Skills are now managed permanently by the Gateway (extraDirs)
-        );
-
-        let triggeredTopic = null;
-
-        // Detection: Native Gateway Execution (via 'exec' tool)
-        // We look for the handoff script's success message in the agent's response.
-        if (response.content && (response.content.includes("research for") || response.content.includes("Lineage trace initiated"))) {
-            // Extraction logic: find the topic within quotes or backticks
-            const match = response.content.match(/research for ['"`](.*?)['"``]/) || 
-                          response.content.match(/lineage of ['"`](.*?)['"``]/i) ||
-                          response.content.match(/initiated for ['"`](.*?)['"``]/);
-            if (match) {
-                triggeredTopic = sanitizeTopic(match[1]);
-            }
-        }
-
-        if (triggeredTopic) {
-            logToFile(`[AGENT DECISION]: Triggering kernel for "${triggeredTopic}" based on conversation.`);
-            
-            if (activeTraces >= TRACE_CONCURRENCY_LIMIT) {
-                await enqueueTrace(ui, triggeredTopic);
-            } else {
-                activeTraces += 1;
-                await startTrace(ui, triggeredTopic);
-            }
-        } else {
-            // Standard conversational response
-            let replyContent = response.content || "I'm not sure how to respond to that.";
-            
-            // Discord has a strict 2000 character limit per message.
-            if (replyContent.length > 2000) {
-                logToFile(`SYSTEM: Truncating long conversational response (${replyContent.length} chars).`);
-                replyContent = replyContent.substring(0, 1900) + "... [Content Truncated due to Discord limits]";
-            }
-            
-            await message.reply(replyContent);
-        }
-    } catch (err) {
-        logToFile(`OPENCLAW ERROR: ${err.message}`);
-        await message.reply("⚠️ Sorry, I'm having trouble connecting to my reasoning brain.");
-    }
-});
-
-/**
- * GLOBAL PROCESS SAFETY
- */
-process.on('uncaughtException', (error) => {
-    logToFile(`CRITICAL: Uncaught Exception: ${error.message}`);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-    logToFile(`CRITICAL: Unhandled Rejection: ${reason}`);
-});
-
-client.login(TOKEN);
+process.on('uncaughtException', (e) => logToFile(`CRITICAL ERROR: ${e.message}`));
+process.on('unhandledRejection', (r) => logToFile(`CRITICAL REJECTION: ${r}`));
