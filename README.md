@@ -57,170 +57,19 @@ To ensure stability and responsiveness, Sci-Trace utilizes a decoupled, multi-la
 -   **The Persona (OpenClaw):** A conversational agent acting as a **Senior Research Fellow** (formal, scholarly, and witty) that plans and reasons over user requests and triggers research tasks.
 -   **The Brain (Kernel):** A transient Python process powered by **LangGraph** and **Pydantic AI**. It handles the heavy-duty logic of fetching data from the Semantic Scholar API and reasoning over citation significance.
 
-```mermaid
-flowchart LR
-    subgraph Clients["User Interfaces"]
-        D[Discord]
-        S[Slack]
-    end
-
-    subgraph Host["Host Layer (Node.js)"]
-        Router{Router}
-        Bridge[Kernel Bridge]
-        Adapters[UI Adapters & Chunking]
-    end
-
-    subgraph Agent["Agent Layer (Python)"]
-        OpenClaw[OpenClaw Persona]
-    end
-
-    subgraph Kernel["Research Kernel (Python)"]
-        LG[LangGraph State Machine]
-        Plot[Visualizer]
-    end
-
-    subgraph APIs["External APIs"]
-        SS[Semantic Scholar]
-        LLM[OpenRouter / Gemini]
-    end
-
-    %% Interactions
-    Clients -- Commands/Mentions --> Router
-    Router -- Handoff --> OpenClaw
-    OpenClaw -- "[TRACE: X]" --> Router
-    Router -- Spawn --> Bridge
-    Bridge -- topic --> LG
-    LG <--> APIs
-    LG --> Plot
-    Plot -- PNG --> Adapters
-    Bridge -- "[UI:UPDATE]" --> Adapters
-    Adapters -- Results --> Clients
-
-    style Host fill:#d4edda,stroke:#28a745
-    style Agent fill:#fff3cd,stroke:#ffc107
-    style Kernel fill:#cce5ff,stroke:#007bff
-    style APIs fill:#f9f9f9,stroke:#999,stroke-dasharray: 5 5
-```
+<object><center style="float:none;position:relative;padding:1em;margin:0em 0em 0em 0em;width:90%"><img cite="" copyrighted="false" src="docs/assets/v22-arch-seq2.png" style="padding:1em;margin:.5em;border:1px solid grey;width:90%"><figcaption style="font-size: 0.9em; color: #666; margin-top: 0.5em;max-width:90%">Three-layer architecture: The Host (Node.js body) routes slash commands directly, OpenClaw (Agent) autonomously interprets natural language and decides whether to trigger traces or respond directly, and the Kernel (Python brain) executes research tasks while querying external LLM and paper APIs.</figcaption></center></object>
 
 ## 🔄 Request Lifecycle
 
 The following sequence illustrates the autonomous handoff between the persistent chat interfaces and the ephemeral research kernel.
 
-```mermaid
-sequenceDiagram
-    autonumber
-
-    %% Actors and Components
-    actor User as 👤 User (Discord/Slack)
-    participant Platform as ☁️ Chat Platform
-    participant Host as 🟢 Host (Node.js/Bridge)
-    participant OpenClaw as 🤖 OpenClaw Agent
-    participant Kernel as 🐍 Kernel (Python/LangGraph)
-    participant SemSch as 📚 Semantic Scholar API
-    participant LLM as 🧠 LLM (OpenRouter)
-    participant FS as 💾 File System
-
-    %% --- PHASE 1: INITIATION (DUAL PATH) ---
-    Note over User, OpenClaw: 🟢 Phase 1: Initiation (Dual Path Routing)
-
-    alt Path A: Slash Command
-        User->>Platform: Slash Command: "/trace BERT"
-        Platform->>Host: Interaction/Command Event
-        Host->>Host: Parse Command ("/trace")
-        Host->>Platform: Defer / Acknowledge (Thinking...)
-    else Path B: Natural Language
-        User->>Platform: Message: "@Assistant where did BERT come from?"
-        Platform->>OpenClaw: Message Event
-        OpenClaw->>LLM: Analyze Intent
-        LLM-->>OpenClaw: Suggest get-scientific-lineage
-        OpenClaw->>OpenClaw: exec get-scientific-lineage.py
-        OpenClaw->>Host: HTTP POST /trigger-trace (topic, channel, platform)
-        OpenClaw->>Platform: Reply: "[TRACE: BERT] Commencing excavation..."
-        Host->>Host: Parse "[TRACE: BERT]" Tag (Optional Trigger)
-    end
-
-    %% --- PHASE 2: HANDOFF ---
-    Note over Host, Kernel: 🟡 Phase 2: The Asynchronous Bridge
-    Host->>Kernel: spawn("python3 kernel/src/main.py --topic 'BERT'")
-    activate Kernel
-
-    Kernel->>Kernel: Acquire /tmp/sci-trace.lock
-    Kernel->>Kernel: Load Env Vars (.env)
-
-    %% --- PHASE 3: RECURSIVE LOGIC ---
-    Note over Kernel, LLM: 🔵 Phase 3: The Reasoning Loop
-
-    loop Until Root Found (Year < 2010 or Max Depth)
-
-        %% Search Node
-        rect rgb(230, 245, 255)
-            Note right of Kernel: Node: Search & Harvest
-            Kernel->>SemSch: GET /graph/v1/paper/search
-            SemSch-->>Kernel: JSON (Paper Details)
-
-            %% UI Feedback Loop via Stdout (Bypasses OpenClaw)
-            Kernel->>Host: stdout: "[UI:UPDATE] Found 'BERT'. Checking references..."
-            Host->>Platform: Update Status UI ("Found 'BERT'...")
-
-            Kernel->>SemSch: GET /graph/v1/paper/{id}/references
-            SemSch-->>Kernel: JSON (Top 10 Parents)
-        end
-
-        %% Reasoning Node
-        rect rgb(255, 245, 230)
-            Note right of Kernel: Node: Reason (Pydantic AI)
-            Kernel->>LLM: POST /chat/completions<br/>(Schema: CitationDecision)
-            LLM-->>Kernel: JSON {selected_id, reasoning}
-            Kernel->>Kernel: Validate Schema & Logic
-        end
-
-        Kernel->>Kernel: Update State (Current = Parent)
-    end
-
-    %% --- PHASE 4: ARTIFACT GENERATION ---
-    Note over Kernel, FS: 🟣 Phase 4: Visualization
-    Kernel->>Kernel: Run Plotting Node (Matplotlib)
-    Kernel->>FS: Write File ("kernel/artifacts/trace_123.png")
-    FS-->>Kernel: File Path Success
-
-    %% --- PHASE 5: COMPLETION ---
-    Note over Kernel, User: 🟢 Phase 5: Handoff
-    Kernel->>Host: stdout: "[UI:IMAGE] /abs/path/to/trace_123.png"
-    Kernel->>Host: stdout: "[UI:FINAL] Full narrative summary..."
-    deactivate Kernel
-
-    Host->>Host: chunkString(summary, platform_limit)
-    Host->>FS: Read File Stream
-    loop For each Chunk
-        Host->>Platform: Send Message/Embed (Part X/Y)
-    end
-    Host->>Platform: Upload PNG Artifact
-    Platform->>User: Display Graph Image + Result
-```
+<object><center style="float:none;position:relative;padding:1em;margin:0em 0em 0em 0em;width:90%"><img cite="" copyrighted="false" src="docs/assets/v22-seq.png" style="padding:1em;margin:.5em;border:1px solid grey;width:90%"><figcaption style="font-size: 0.9em; color: #666; margin-top: 0.5em;max-width:90%">Requests flow through two paths: slash commands route directly to the Host bridge, while natural language messages flow through OpenClaw for intent analysis. Both paths converge at the research kernel, which reports progress via tagged stdout and returns artifacts.</figcaption></center></object>
 
 ### 🧠 Kernel Logic: LangGraph State Machine
 
 The research kernel operates as a cyclic state machine, allowing it to recursively traverse the citation graph until it identifies a foundational root.
 
-```mermaid
-graph TD
-    START((START)) --> Search[Node: Search Initial Topic]
-    Search --> Filter[Node: Fetch & Filter References]
-    Filter --> Evaluate[Node: Parallel LLM Evaluation]
-
-    Evaluate --> Check{Should Continue?}
-
-    Check -- "Match Found (Next Depth)" --> Filter
-    Check -- "No Match (Next Batch)" --> Evaluate
-    Check -- "Root Found / Max Depth" --> Summary[Node: Narrative Synthesis]
-
-    Summary --> Plot[Node: Generate PNG Graph]
-    Plot --> END((END))
-
-    style START fill:#d4edda,stroke:#28a745
-    style END fill:#f8d7da,stroke:#dc3545
-    style Check fill:#fff3cd,stroke:#ffc107
-```
+<object><center style="float:none;position:relative;padding:1em;margin:0em 0em 0em 0em;width:99%"><img cite="" copyrighted="false" src="docs/assets/v22-langgraph_agent.png" style="padding:1em;margin:.5em;border:1px solid grey;width:40%"><figcaption style="font-size: 0.9em; color: #666; margin-top: 0.5em;max-width:90%">LangGraph state machine: Recursively searches for papers, filters references, evaluates candidates via Pydantic AI for methodological significance, and continues until a foundational root is identified. Finally synthesizes narrative results and generates visual citation graph.</figcaption></center></object>
 
 <!--
 
