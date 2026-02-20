@@ -57,7 +57,7 @@ resource "aws_instance" "sci_trace" {
   vpc_security_group_ids = [aws_security_group.sci_trace_sg.id]
 
   # Bootstrap the instance on first boot.
-  user_data = file("${path.module}/user_data.sh")
+  user_data = file("${path.module}/user-data.sh")
 
   root_block_device {
     # Set the root volume size and type.

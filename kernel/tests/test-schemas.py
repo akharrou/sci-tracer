@@ -13,7 +13,8 @@ def test_paper_validation():
     assert paper.citation_count == 100
 
 def test_agent_state_init():
-    state = AgentState(target_topic="AI")
+    state = AgentState(target_topic="AI", trace_id="test-trace-uuid")
     assert state.target_topic == "AI"
+    assert state.trace_id == "test-trace-uuid"
     assert state.depth == 0
     assert state.history == []

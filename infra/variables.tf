@@ -9,7 +9,7 @@ variable "instance_type" {
   # EC2 size for the host instance.
   description = "The EC2 instance type for the Sci-Trace host."
   type        = string
-  default     = "t3.medium"
+  default     = "t3.large"
 }
 
 variable "key_name" {
