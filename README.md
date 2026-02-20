@@ -19,15 +19,6 @@ The potential value is immense: reducing the countless hours of literature revie
 ## 🎥 Demos
 
 <td style="width: 50%; padding: 10px;">
-  <strong>Deterministic Mapping</strong>
-  <p style="font-size: 0.9em; color: #666;">
-    Instantaneous research generation via structured /trace commands.
-  </p>
-</td>
-
-https://github.com/user-attachments/assets/f0a4b262-5831-42df-9953-69d4a557a8eb
-
-<td style="width: 50%; padding: 10px;">
   <strong>Agentic Discovery</strong>
   <p style="font-size: 0.9em; color: #666;">
     Autonomous intent analysis and scholarly reasoning via natural language mentions.
@@ -35,6 +26,15 @@ https://github.com/user-attachments/assets/f0a4b262-5831-42df-9953-69d4a557a8eb
 </td>
 
 https://github.com/user-attachments/assets/d18b2fd4-0fd2-484b-847d-46e874d33f5f
+
+<td style="width: 50%; padding: 10px;">
+  <strong>Deterministic Mapping</strong>
+  <p style="font-size: 0.9em; color: #666;">
+    Instantaneous research generation via structured /trace commands.
+  </p>
+</td>
+
+https://github.com/user-attachments/assets/f0a4b262-5831-42df-9953-69d4a557a8eb
 
 <em>Sci-Trace automates the research tracing lifecycle: recursive graph traversal, LLM-powered methodological validation, and good-fidelity visual synthesis.</em>
 
