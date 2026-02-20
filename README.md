@@ -16,37 +16,27 @@ Sci-Trace is more than a search tool; it is a demonstration of **autonomous scie
 
 The potential value is immense: reducing the countless hours of literature review required to understand a new field to a **few minutes of autonomous tracing**.
 
-## 🎥 Demo
+## 🎥 Demos
 
-<table style="width: 100%; text-align: center;">
-  <tr>
-    <td style="width: 50%; padding: 10px;">
-      <strong>Deterministic Mapping</strong>
-      <p style="font-size: 0.9em; color: #666;">
-        Instantaneous research generation via structured `/trace` commands.
-      </p>
-      <video width="100%" controls style="border: 1px solid #ddd; border-radius: 8px;">
-        <source src="docs/assets/demo-trace.mp4" type="video/mp4">
-        Your browser does not support the video tag.
-      </video>
-    </td>
-    <td style="width: 50%; padding: 10px;">
-      <strong>Agentic Discovery</strong>
-      <p style="font-size: 0.9em; color: #666;">
-        Autonomous intent analysis and scholarly reasoning via natural language mentions.
-      </p>
-      <video width="100%" controls style="border: 1px solid #ddd; border-radius: 8px;">
-        <source src="docs/assets/demo-agent.mp4" type="video/mp4">
-        Your browser does not support the video tag.
-      </video>
-    </td>
-  </tr>
-  <tr>
-    <td colspan="2" style="padding: 10px; font-size: 0.85em; color: #888;">
-      <em>Sci-Trace automates the complete research lifecycle: recursive graph traversal, LLM-powered methodological validation, and high-fidelity visual synthesis.</em>
-    </td>
-  </tr>
-</table>
+<td style="width: 50%; padding: 10px;">
+  <strong>Deterministic Mapping</strong>
+  <p style="font-size: 0.9em; color: #666;">
+    Instantaneous research generation via structured /trace commands.
+  </p>
+</td>
+
+https://github.com/user-attachments/assets/f0a4b262-5831-42df-9953-69d4a557a8eb
+
+<td style="width: 50%; padding: 10px;">
+  <strong>Agentic Discovery</strong>
+  <p style="font-size: 0.9em; color: #666;">
+    Autonomous intent analysis and scholarly reasoning via natural language mentions.
+  </p>
+</td>
+
+https://github.com/user-attachments/assets/d18b2fd4-0fd2-484b-847d-46e874d33f5f
+
+<em>Sci-Trace automates the research tracing lifecycle: recursive graph traversal, LLM-powered methodological validation, and good-fidelity visual synthesis.</em>
 
 
 ## 🏗 System Architecture: The Host-OpenClaw-Kernel Pattern
@@ -57,19 +47,22 @@ To ensure stability and responsiveness, Sci-Trace utilizes a decoupled, multi-la
 -   **The Persona (OpenClaw):** A conversational agent acting as a **Senior Research Fellow** (formal, scholarly, and witty) that plans and reasons over user requests and triggers research tasks.
 -   **The Brain (Kernel):** A transient Python process powered by **LangGraph** and **Pydantic AI**. It handles the heavy-duty logic of fetching data from the Semantic Scholar API and reasoning over citation significance.
 
-<object><center style="float:none;position:relative;padding:1em;margin:0em 0em 0em 0em;width:90%"><img cite="" copyrighted="false" src="docs/assets/v22-arch-seq2.png" style="padding:1em;margin:.5em;border:1px solid grey;width:90%"><figcaption style="font-size: 0.9em; color: #666; margin-top: 0.5em;max-width:90%">Three-layer architecture: The Host (Node.js body) routes slash commands directly, OpenClaw (Agent) autonomously interprets natural language and decides whether to trigger traces or respond directly, and the Kernel (Python brain) executes research tasks while querying external LLM and paper APIs.</figcaption></center></object>
+<br>
+<object><center style="float:none;position:relative;padding:1em;margin:0em 0em 0em 0em;width:90%"><img cite="" copyrighted="false" src="docs/assets/v22-arch-seq2.png" style="padding:1em;margin:.5em;border:1px solid grey;width:90%"><figcaption style="font-size: 0.9em; color: #666; margin-top: 0.5em;max-width:90%"><br><br>Three-layer architecture: The Host (Node.js body) routes slash commands directly, OpenClaw (Agent) autonomously interprets natural language and decides whether to trigger traces or respond directly, and the Kernel (Python brain) executes research tasks while querying external LLM and paper APIs.</figcaption></center></object>
 
 ## 🔄 Request Lifecycle
 
 The following sequence illustrates the autonomous handoff between the persistent chat interfaces and the ephemeral research kernel.
 
-<object><center style="float:none;position:relative;padding:1em;margin:0em 0em 0em 0em;width:90%"><img cite="" copyrighted="false" src="docs/assets/v22-seq.png" style="padding:1em;margin:.5em;border:1px solid grey;width:90%"><figcaption style="font-size: 0.9em; color: #666; margin-top: 0.5em;max-width:90%">Requests flow through two paths: slash commands route directly to the Host bridge, while natural language messages flow through OpenClaw for intent analysis. Both paths converge at the research kernel, which reports progress via tagged stdout and returns artifacts.</figcaption></center></object>
+<br>
+<object><center style="float:none;position:relative;padding:1em;margin:0em 0em 0em 0em;width:90%"><img cite="" copyrighted="false" src="docs/assets/v22-seq.png" style="padding:1em;margin:.5em;border:1px solid grey;width:90%"><figcaption style="font-size: 0.9em; color: #666; margin-top: 0.5em;max-width:90%"><br>Requests flow through two paths: slash commands route directly to the Host bridge, while natural language messages flow through OpenClaw for intent analysis. Both paths converge at the research kernel, which reports progress via tagged stdout and returns artifacts.</figcaption></center></object>
 
 ### 🧠 Kernel Logic: LangGraph State Machine
 
 The research kernel operates as a cyclic state machine, allowing it to recursively traverse the citation graph until it identifies a foundational root.
 
-<object><center style="float:none;position:relative;padding:1em;margin:0em 0em 0em 0em;width:99%"><img cite="" copyrighted="false" src="docs/assets/v22-langgraph_agent.png" style="padding:1em;margin:.5em;border:1px solid grey;width:40%"><figcaption style="font-size: 0.9em; color: #666; margin-top: 0.5em;max-width:90%">LangGraph state machine: Recursively searches for papers, filters references, evaluates candidates via Pydantic AI for methodological significance, and continues until a foundational root is identified. Finally synthesizes narrative results and generates visual citation graph.</figcaption></center></object>
+<br>
+<object><center style="float:none;position:relative;padding:1em;margin:0em 0em 0em 0em;width:99%"><img cite="" copyrighted="false" src="docs/assets/v22-langgraph_agent.png" style="padding:1em;margin:.5em;border:1px solid grey;width:40%"><figcaption style="font-size: 0.9em; color: #666; margin-top: 0.5em;max-width:90%"><br>LangGraph state machine: Recursively searches for papers, filters references, evaluates candidates via Pydantic AI for methodological significance, and continues until a foundational root is identified. Finally synthesizes narrative results and generates visual citation graph.</figcaption></center></object>
 
 <!--
 
