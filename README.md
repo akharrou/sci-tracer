@@ -1,22 +1,49 @@
 # Sci-Trace: Autonomous Scientific Lineage Mapper
 
-> **Search finds keywords. Sci-Trace finds foundations.**
+**Search finds keywords. Sci-Trace finds foundations.**
 
-Sci-Trace is an agentic research system designed to automate the discovery of a scientific concept's "intellectual lineage." While traditional search tools retrieve documents based on keywords, Sci-Trace acts as a **domain-adaptive agent** that recursively navigates the global citation graph to identify the true methodological ancestors of modern research.
+Sci-Trace is an autonomous research assistant that lives in the cloud and is accessible at any moment through Discord or Slack. Beyond general scientific dialogue, given a particular scientific concept, it can trace that concept's intellectual ancestry, recursively navigating the citation graph to surface the foundational papers that a modern work is built on. What **would otherwise take hours of manual literature review takes minutes**.
 
----
+The system pairs **OpenClaw**, an autonomous AI agent, with a persistent **Host server**, both running on an AWS EC2 instance. OpenClaw handles general research queries directly and, when it detects the intent to trace a concept's lineage, triggers a specialized research pipeline: the Host spawns a Python **Kernel** that fetches papers via the Semantic Scholar API, uses LLM reasoning to evaluate methodological significance at each step, and recursively walks the citation graph until it identifies a foundational root. It then produces a narrative summary and a DAG visualization of the lineage chain, which are forwarded back to the originating Discord or Slack channel.
 
-## 🔬 A Proof-of-Concept for Autonomous Science
+**Key features:**
+- Natural language interaction via Discord and Slack, with autonomous intent detection
+- Recursive citation graph traversal using the Semantic Scholar API
+- LLM-powered evaluation of methodological significance at each step (chain-of-thought, parallel batching)
+- Outputs a citation DAG image and a narrative lineage summary per trace
+- Slash command and natural language entry points; both converge on the same research pipeline
 
-Sci-Trace is more than a search tool; it is a demonstration of **autonomous scientific reasoning**. It addresses three critical challenges in agentic AI:
+Simplified request flow:
 
-1.  **Task Decomposition:** It breaks down the complex research process into a structured state machine: *Search ➔ Filter ➔ Reason ➔ Synthesize ➔ Visualize*.
-2.  **Multi-Platform Hybrid Orchestration:** It supports both deterministic triggers (Slash Commands) and agentic triggers (Natural Language mentions) across **Discord** and **Slack**.
-3.  **Chain-of-Thought (CoT) Evaluation:** It uses LLMs to "read" and evaluate connections, distinguishing between a casual citation and a foundational methodological pillar.
+```
+User (Discord / Slack)
+        │
+        ▼
+   OpenClaw Agent  ──── intent analysis ────► direct response
+        │
+        │ lineage trace detected
+        ▼
+   Host Server  (Node.js, persistent)
+        │
+        │ spawns
+        ▼
+   Python Kernel  (transient)
+        │
+        ├── Semantic Scholar API  (paper fetch)
+        ├── LLM eval  (methodological significance, per candidate)
+        ├── LangGraph state machine  (recursive graph traversal)
+        ├── Narrative synthesis
+        └── DAG image rendering
+        │
+        ▼
+   Host Server  ──► Discord / Slack
+```
 
-The potential value is immense: reducing the countless hours of literature review required to understand a new field to a **few minutes of autonomous tracing**.
+For a full technical deep-dive, see the [Sci-Trace DeepWiki](https://deepwiki.com/akharrou/sci-tracer/1-overview).
 
-## 🎥 Demos
+## Demos
+
+> Traces in these demos were capped at 5 levels of depth and 5 parallel API queries at a time. Both are configurable.
 
 <td style="width: 50%; padding: 10px;">
   <strong>Agentic Discovery</strong>
@@ -39,7 +66,7 @@ https://github.com/user-attachments/assets/f0a4b262-5831-42df-9953-69d4a557a8eb
 <em>Sci-Trace automates the research tracing lifecycle: recursive graph traversal, LLM-powered methodological validation, and good-fidelity visual synthesis.</em>
 
 
-## 🏗 System Architecture: The Host-OpenClaw-Kernel Pattern
+## System Architecture: The Host-OpenClaw-Kernel Pattern
 
 To ensure stability and responsiveness, Sci-Trace utilizes a decoupled, multi-layered architecture:
 
@@ -50,14 +77,14 @@ To ensure stability and responsiveness, Sci-Trace utilizes a decoupled, multi-la
 <br>
 <object><center style="float:none;position:relative;padding:1em;margin:0em 0em 0em 0em;width:90%"><img cite="" copyrighted="false" src="docs/assets/v22-arch-seq2.png" style="padding:1em;margin:.5em;border:1px solid grey;width:90%"><figcaption style="font-size: 0.9em; color: #666; margin-top: 0.5em;max-width:90%"><br><br>Three-layer architecture: The Host (Node.js body) routes slash commands directly, OpenClaw (Agent) autonomously interprets natural language and decides whether to trigger traces or respond directly, and the Kernel (Python brain) executes research tasks while querying external LLM and paper APIs.</figcaption></center></object>
 
-## 🔄 Request Lifecycle
+## Full Request Lifecycle
 
 The following sequence illustrates the autonomous handoff between the persistent chat interfaces and the ephemeral research kernel.
 
 <br>
 <object><center style="float:none;position:relative;padding:1em;margin:0em 0em 0em 0em;width:90%"><img cite="" copyrighted="false" src="docs/assets/v22-seq.png" style="padding:1em;margin:.5em;border:1px solid grey;width:90%"><figcaption style="font-size: 0.9em; color: #666; margin-top: 0.5em;max-width:90%"><br>Requests flow through two paths: slash commands route directly to the Host bridge, while natural language messages flow through OpenClaw for intent analysis. Both paths converge at the research kernel, which reports progress via tagged stdout and returns artifacts.</figcaption></center></object>
 
-### 🧠 Kernel Logic: LangGraph State Machine
+### Kernel Logic: LangGraph State Machine
 
 The research kernel operates as a cyclic state machine, allowing it to recursively traverse the citation graph until it identifies a foundational root.
 
@@ -83,7 +110,7 @@ To ensure no research data is lost due to chat platform constraints, the **Host 
 
 ---
 
-## 🛠 Setup & Installation
+## Setup & Installation
 
 ### 1. Prerequisites
 - Node.js 20+ / Python 3.11+
@@ -117,27 +144,29 @@ Or mention the bot:
 
 ---
 
-## ☁️ Cloud Infrastructure & Deployment
+## Cloud Infrastructure & Deployment
 
-Sci-Trace is designed with high availability and autonomous operation in the cloud. It includes a complete **Infrastructure as Code (IaC)** suite for automated provisioning.
+Sci-Trace is designed with high availability in mind and is designed to operate autonomously in the cloud. It includes a complete **Infrastructure as Code (IaC)** suite for automated provisioning on AWS.
 
-### 1. Provisioning (Terraform)
-The project includes HashiCorp Terraform configurations in the `infra/` directory to spin up the production environment:
-- **Provider:** AWS (Amazon Web Services).
-- **Instance:** `t3.medium` (Ubuntu 22.04 LTS).
-- **Automation:** Uses `user_data.sh` to automatically install Node.js 20, Python 3.11, `uv`, and PM2 on first boot.
+### Provisioning (Terraform)
 
-### 2. Deployment (`deploy.sh`)
-Code synchronization is handled via a lightweight deployment script:
+Terraform configurations are located in `infra/`. They provision:
+
+- **Provider:** AWS
+- **Instance:** `t3.medium` running Ubuntu 22.04 LTS
+- **Bootstrap:** `user_data.sh` installs Node.js 20, Python 3.11, `uv`, and PM2 on first boot
+
+### Deployment
+
 ```bash
 ./deploy.sh <EC2_PUBLIC_IP> <PEM_KEY_PATH>
 ```
-This script uses `rsync` to sync the codebase (excluding local environments) and performs remote setup for both the Kernel and the Host.
 
-### 3. Process Management (PM2)
-The Host Daemon is managed by **PM2**, ensuring the bot automatically restarts if it crashes or the server reboots.
-- **Config:** `ecosystem.config.js`
-- **Logs:** Persistent logging to `host/logs/app.log`.
+Uses `rsync` to synchronize the codebase (excluding local environments) and performs remote setup for both the Kernel and the Host.
+
+### Process Management (PM2)
+
+The Host daemon is managed by PM2, configured via `ecosystem.config.js`. Logs are written to `host/logs/app.log`. The process restarts automatically on crash or server reboot.
 
 <!--
 
