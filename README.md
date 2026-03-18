@@ -2,20 +2,20 @@
 
 **Table of Contents**
 
-- [Sci-Trace: Autonomous Scientific Lineage Mapper](#sci-trace-autonomous-scientific-lineage-mapper)
-  - [Demos](#demos)
-  - [System Architecture: The Host-OpenClaw-Kernel Pattern](#system-architecture-the-host-openclaw-kernel-pattern)
-  - [Full Request Lifecycle](#full-request-lifecycle)
-    - [Kernel Logic: LangGraph State Machine](#kernel-logic-langgraph-state-machine)
-  - [Setup \& Installation](#setup--installation)
-    - [1. Prerequisites](#1-prerequisites)
-    - [2. Environment Configuration](#2-environment-configuration)
-    - [3. Installation](#3-installation)
-    - [4. Running the Trace](#4-running-the-trace)
-  - [Cloud Infrastructure \& Deployment](#cloud-infrastructure--deployment)
-    - [Provisioning (Terraform)](#provisioning-terraform)
-    - [Deployment](#deployment)
-    - [Process Management (PM2)](#process-management-pm2)
+- [Gist(#sci-trace-autonomous-scientific-lineage-mapper)
+- [Demos](#demos)
+- [System Architecture: The Host-OpenClaw-Kernel Pattern](#system-architecture-the-host-openclaw-kernel-pattern)
+- [Full Request Lifecycle](#full-request-lifecycle)
+  - [Kernel Logic: LangGraph State Machine](#kernel-logic-langgraph-state-machine)
+- [Setup \& Installation](#setup--installation)
+  - [1. Prerequisites](#1-prerequisites)
+  - [2. Environment Configuration](#2-environment-configuration)
+  - [3. Installation](#3-installation)
+  - [4. Running the Trace](#4-running-the-trace)
+- [Cloud Infrastructure \& Deployment](#cloud-infrastructure--deployment)
+  - [Provisioning (Terraform)](#provisioning-terraform)
+  - [Deployment](#deployment)
+  - [Process Management (PM2)](#process-management-pm2)
 
 **Search finds keywords. Sci-Trace finds foundations.**
 
