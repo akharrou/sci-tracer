@@ -2,7 +2,7 @@
 
 **Table of Contents**
 
-- [Gist(#sci-trace-autonomous-scientific-lineage-mapper)
+- [Gist](#sci-trace-autonomous-scientific-lineage-mapper)
 - [Demos](#demos)
 - [System Architecture: The Host-OpenClaw-Kernel Pattern](#system-architecture-the-host-openclaw-kernel-pattern)
 - [Full Request Lifecycle](#full-request-lifecycle)
