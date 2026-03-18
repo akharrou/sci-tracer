@@ -1,17 +1,34 @@
 # Sci-Trace: Autonomous Scientific Lineage Mapper
 
+**Table of Contents**
+
+- [Sci-Trace: Autonomous Scientific Lineage Mapper](#sci-trace-autonomous-scientific-lineage-mapper)
+  - [Demos](#demos)
+  - [System Architecture: The Host-OpenClaw-Kernel Pattern](#system-architecture-the-host-openclaw-kernel-pattern)
+  - [Full Request Lifecycle](#full-request-lifecycle)
+    - [Kernel Logic: LangGraph State Machine](#kernel-logic-langgraph-state-machine)
+  - [Setup \& Installation](#setup--installation)
+    - [1. Prerequisites](#1-prerequisites)
+    - [2. Environment Configuration](#2-environment-configuration)
+    - [3. Installation](#3-installation)
+    - [4. Running the Trace](#4-running-the-trace)
+  - [Cloud Infrastructure \& Deployment](#cloud-infrastructure--deployment)
+    - [Provisioning (Terraform)](#provisioning-terraform)
+    - [Deployment](#deployment)
+    - [Process Management (PM2)](#process-management-pm2)
+
 **Search finds keywords. Sci-Trace finds foundations.**
 
 Sci-Trace is an autonomous research assistant that lives in the cloud and is accessible at any moment through Discord or Slack. Beyond general scientific dialogue, given a particular scientific concept, it can trace that concept's intellectual ancestry, recursively navigating the citation graph to surface the foundational papers that a modern work is built on. What **would otherwise take hours of manual literature review takes minutes**.
 
-The system pairs **OpenClaw**, an autonomous AI agent, with a persistent **Host server**, both running on an AWS EC2 instance. OpenClaw handles general research queries directly and, when it detects the intent to trace a concept's lineage, triggers a specialized research pipeline: the Host spawns a Python **Kernel** that fetches papers via the Semantic Scholar API, uses LLM reasoning to evaluate methodological significance at each step, and recursively walks the citation graph until it identifies a foundational root. It then produces a narrative summary and a DAG visualization of the lineage chain, which are forwarded back to the originating Discord or Slack channel.
+The system pairs **OpenClaw**, an autonomous AI agent, with a persistent **Host server**, both running on an AWS EC2 instance. OpenClaw handles general research queries directly and, when it detects the intent to trace a concept's lineage, utilizes a specialized tool to trigger the research process. This tool sends a request to the Host server to spawn a **LangGraph agent** (the Python **Kernel**) that fetches papers via the Semantic Scholar API, uses LLM reasoning to evaluate methodological significance at each step, and recursively walks the citation graph until it identifies a foundational root. Results and real-time progress are automatically streamed back to the originating Discord or Slack channel.
 
 **Key features:**
 - Natural language interaction via Discord and Slack, with autonomous intent detection
 - Recursive citation graph traversal using the Semantic Scholar API
 - LLM-powered evaluation of methodological significance at each step (chain-of-thought, parallel batching)
 - Outputs a citation DAG image and a narrative lineage summary per trace
-- Slash command and natural language entry points; both converge on the same research pipeline
+- Slash command and natural language entry points; both converge on the same specialized LangGraph agent tool
 
 Simplified request flow:
 
